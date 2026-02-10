@@ -30,7 +30,7 @@ KELLY_FRACTION = 0.25           # Quarter-Kelly
 
 # ── Scanning parameters ──────────────────────────────────────────────────────
 SCAN_INTERVAL_SECONDS = 1800    # 30 minutes
-MIN_LIQUIDITY = 500             # Skip markets with liquidity below this (USD)
+MIN_LIQUIDITY = 100             # Skip markets with liquidity below this (USD)
 MAX_DAYS_TO_RESOLUTION = 30     # Skip markets resolving more than 30 days out
 MARKET_TAG = "weather"          # Polymarket event tag to filter
 

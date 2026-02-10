@@ -17,11 +17,17 @@ import config
 logger = logging.getLogger(__name__)
 
 
-def fetch_weather_markets() -> list[dict[str, Any]]:
-    """Fetch active weather events from the Gamma API and flatten into markets."""
+def fetch_weather_events() -> list[dict[str, Any]]:
+    """
+    Fetch active weather events from the Gamma API.
+
+    Returns parsed events, each containing its list of markets (outcome buckets).
+    Polymarket weather events typically have multiple markets per event,
+    e.g. "Highest temperature in NYC on Feb 11?" has 7 bucket markets.
+    """
     url = f"{config.GAMMA_API_URL}/events"
     params = {
-        "tag": config.MARKET_TAG,
+        "tag_slug": config.MARKET_TAG,
         "active": "true",
         "closed": "false",
         "limit": 100,
@@ -31,27 +37,75 @@ def fetch_weather_markets() -> list[dict[str, Any]]:
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=30)
         resp.raise_for_status()
-        events = resp.json()
+        raw_events = resp.json()
     except requests.RequestException as e:
         logger.error("Failed to fetch events from Gamma API: %s", e)
         return []
 
+    events = []
+    for raw in raw_events:
+        parsed = _parse_event(raw)
+        if parsed:
+            events.append(parsed)
+
+    logger.info("Fetched %d weather events (%d total markets)", len(events), sum(len(e["markets"]) for e in events))
+    return events
+
+
+def _parse_event(raw_event: dict[str, Any]) -> dict[str, Any] | None:
+    """Parse a raw Gamma API event into our internal format."""
+    title = raw_event.get("title", "")
+    slug = raw_event.get("slug", "")
+    raw_markets = raw_event.get("markets", [])
+
+    if not raw_markets:
+        return None
+
     markets = []
-    for event in events:
-        event_title = event.get("title", "")
-        event_slug = event.get("slug", "")
-        for market in event.get("markets", []):
-            parsed = _parse_market(market, event_title, event_slug)
-            if parsed:
-                markets.append(parsed)
+    for m in raw_markets:
+        parsed = _parse_market(m)
+        if parsed:
+            markets.append(parsed)
 
-    logger.info("Fetched %d weather markets from %d events", len(markets), len(events))
-    return markets
+    if not markets:
+        return None
+
+    # Use the first market's end date as the event end date
+    end_date = markets[0].get("end_date")
+    days_to_resolution = markets[0].get("days_to_resolution")
+
+    # Filter: skip events that resolve too far out
+    if days_to_resolution is not None and days_to_resolution > config.MAX_DAYS_TO_RESOLUTION:
+        logger.debug("Skipping event '%s' — resolves in %.0f days", title, days_to_resolution)
+        return None
+
+    # Total liquidity across all markets in the event
+    total_liquidity = sum(m["liquidity"] for m in markets)
+
+    return {
+        "event_title": title,
+        "event_slug": slug,
+        "markets": markets,
+        "end_date": end_date,
+        "days_to_resolution": days_to_resolution,
+        "total_liquidity": total_liquidity,
+        "total_volume": sum(m["volume"] for m in markets),
+        # Build a summary of all outcomes and prices for Claude
+        "outcome_summary": [
+            {
+                "question": m["question"],
+                "outcomes": m["outcomes"],
+                "outcome_prices": m["outcome_prices"],
+                "condition_id": m["condition_id"],
+                "clob_token_ids": m["clob_token_ids"],
+                "liquidity": m["liquidity"],
+            }
+            for m in markets
+        ],
+    }
 
 
-def _parse_market(
-    market: dict[str, Any], event_title: str, event_slug: str
-) -> dict[str, Any] | None:
+def _parse_market(market: dict[str, Any]) -> dict[str, Any] | None:
     """Parse a single market dict from the Gamma API response."""
     try:
         # outcomePrices and clobTokenIds may be JSON strings or lists
@@ -67,59 +121,35 @@ def _parse_market(
         if isinstance(outcomes, str):
             outcomes = json.loads(outcomes)
 
-        # Need at least YES/NO with prices and token IDs
         if not outcomes or not outcome_prices or not clob_token_ids:
             return None
 
-        # Parse prices as floats
         prices = [float(p) for p in outcome_prices]
 
         # Parse end date
         end_date_str = market.get("endDate") or market.get("end_date_iso")
         end_date = None
+        days_to_resolution = None
         if end_date_str:
-            # Handle various ISO formats
             end_date_str = end_date_str.replace("Z", "+00:00")
             try:
                 end_date = datetime.fromisoformat(end_date_str)
+                if end_date.tzinfo is None:
+                    end_date = end_date.replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                days_to_resolution = (end_date - now).total_seconds() / 86400
+                if days_to_resolution < 0:
+                    return None
             except ValueError:
                 pass
 
-        # Check days to resolution
-        if end_date:
-            now = datetime.now(timezone.utc)
-            if end_date.tzinfo is None:
-                end_date = end_date.replace(tzinfo=timezone.utc)
-            days_to_resolution = (end_date - now).total_seconds() / 86400
-            if days_to_resolution > config.MAX_DAYS_TO_RESOLUTION:
-                logger.debug(
-                    "Skipping market '%s' — resolves in %.0f days",
-                    market.get("question", ""),
-                    days_to_resolution,
-                )
-                return None
-            if days_to_resolution < 0:
-                return None
-        else:
-            days_to_resolution = None
-
-        # Liquidity filter
         liquidity = float(market.get("liquidity", 0) or 0)
-        if liquidity < config.MIN_LIQUIDITY:
-            logger.debug(
-                "Skipping market '%s' — liquidity $%.0f below threshold",
-                market.get("question", ""),
-                liquidity,
-            )
-            return None
 
         return {
             "condition_id": market.get("conditionId", ""),
             "question_id": market.get("questionId", ""),
             "question": market.get("question", ""),
             "description": market.get("description", ""),
-            "event_title": event_title,
-            "event_slug": event_slug,
             "outcomes": outcomes,
             "outcome_prices": prices,
             "clob_token_ids": clob_token_ids,
@@ -128,7 +158,6 @@ def _parse_market(
             "end_date": end_date.isoformat() if end_date else None,
             "days_to_resolution": days_to_resolution,
             "market_slug": market.get("slug", ""),
-            "active": market.get("active", True),
         }
 
     except (ValueError, TypeError, json.JSONDecodeError) as e:
@@ -176,15 +205,3 @@ def fetch_clob_prices(token_id: str) -> dict[str, Any] | None:
         result["best_ask"] = None
 
     return result
-
-
-def enrich_market_with_clob(market: dict[str, Any]) -> dict[str, Any]:
-    """Add live CLOB price data to a market dict."""
-    clob_data = {}
-    for i, token_id in enumerate(market.get("clob_token_ids", [])):
-        outcome = market["outcomes"][i] if i < len(market["outcomes"]) else f"outcome_{i}"
-        prices = fetch_clob_prices(token_id)
-        if prices:
-            clob_data[outcome] = prices
-    market["clob_prices"] = clob_data
-    return market

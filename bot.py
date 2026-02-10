@@ -22,13 +22,13 @@ import time
 from typing import Any
 
 import config
-from analyzer import AnalysisResult, analyze_market
+from analyzer import EventAnalysis, analyze_event
 from bot_logger import log_analysis, log_scan_cycle, setup_logging
 from cost_tracker import AnalysisCache, CostTracker
 from executor import execute_trade, get_balance, get_clob_client, get_open_positions
-from scanner import enrich_market_with_clob, fetch_weather_markets
+from scanner import fetch_weather_events
 from sizing import calculate_bet
-from weather import fetch_weather_for_market
+from weather import extract_city_from_question, fetch_weather_for_city
 
 logger = logging.getLogger(__name__)
 
@@ -62,25 +62,73 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _prefilter_market(market: dict[str, Any]) -> str | None:
-    """
-    Quick checks to skip markets before spending an API call.
+def _fetch_weather_for_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract city from event title or market questions and fetch weather."""
+    # Try event title first, then individual market questions
+    texts_to_try = [event.get("event_title", "")]
+    for m in event.get("markets", []):
+        texts_to_try.append(m.get("question", ""))
 
-    Returns a skip reason string, or None if market passes.
-    """
-    prices = market.get("outcome_prices", [])
-    if not prices:
-        return "no prices"
-
-    price_yes = prices[0]
-
-    # Markets near 0 or 1 are already decided — no edge to find
-    if price_yes < config.SKIP_EXTREME_PRICE_THRESHOLD:
-        return f"price too low ({price_yes:.2f})"
-    if price_yes > (1 - config.SKIP_EXTREME_PRICE_THRESHOLD):
-        return f"price too high ({price_yes:.2f})"
+    for text in texts_to_try:
+        match = extract_city_from_question(text)
+        if match:
+            city_name, (lat, lon, country_code) = match
+            return fetch_weather_for_city(city_name, lat, lon, country_code)
 
     return None
+
+
+def _find_best_trade(
+    event: dict[str, Any],
+    analysis: EventAnalysis,
+    bankroll: float,
+    open_position_count: int,
+) -> dict[str, Any] | None:
+    """
+    Given an event analysis with fair values for all buckets,
+    find the single best trade (largest edge) that passes all filters.
+    """
+    markets = event.get("markets", [])
+    summaries = event.get("outcome_summary", [])
+    buckets = analysis.buckets
+
+    if len(buckets) != len(summaries):
+        logger.warning(
+            "  Bucket count mismatch: Claude returned %d, event has %d",
+            len(buckets), len(summaries),
+        )
+        # Use minimum of the two to avoid index errors
+        count = min(len(buckets), len(summaries))
+    else:
+        count = len(buckets)
+
+    best = None
+    best_edge = 0.0
+
+    for i in range(count):
+        fair_value = buckets[i].get("fair_value_yes", 0)
+        market_price = summaries[i]["outcome_prices"][0] if summaries[i]["outcome_prices"] else 0.5
+
+        bet = calculate_bet(
+            fair_value_yes=fair_value,
+            confidence=analysis.confidence,
+            market_price_yes=market_price,
+            bankroll=bankroll,
+            open_positions=open_position_count,
+        )
+
+        if bet.should_trade and bet.edge > best_edge:
+            best_edge = bet.edge
+            best = {
+                "market_index": i,
+                "market": markets[i] if i < len(markets) else None,
+                "summary": summaries[i],
+                "bet": bet,
+                "fair_value": fair_value,
+                "market_price": market_price,
+            }
+
+    return best
 
 
 def run_cycle(
@@ -105,127 +153,128 @@ def run_cycle(
     )
     logger.info("=" * 60)
 
-    # ── Step 1: Scan for weather markets ──────────────────────────────────
-    logger.info("Step 1: Scanning Polymarket for weather markets...")
-    markets = fetch_weather_markets()
-    if not markets:
-        logger.info("No weather markets found. Waiting for next cycle.")
+    # ── Step 1: Scan for weather events ───────────────────────────────────
+    logger.info("Step 1: Scanning Polymarket for weather events...")
+    events = fetch_weather_events()
+    if not events:
+        logger.info("No weather events found. Waiting for next cycle.")
         log_scan_cycle(cycle_num, 0, 0, 0, 0, bankroll)
         return bankroll
 
-    logger.info("Found %d weather markets passing filters", len(markets))
+    logger.info("Found %d weather events", len(events))
 
-    # ── Step 2-5: Process each market ─────────────────────────────────────
-    markets_analyzed = 0
+    # ── Step 2-5: Process each event ──────────────────────────────────────
+    events_analyzed = 0
     trades_attempted = 0
     trades_executed = 0
 
-    for market in markets:
+    for event in events:
         if _shutdown:
-            logger.info("Shutdown requested, stopping market processing")
+            logger.info("Shutdown requested, stopping event processing")
             break
 
-        question = market.get("question", "Unknown")
-        condition_id = market.get("condition_id", "")
+        title = event.get("event_title", "Unknown")
+        slug = event.get("event_slug", "")
+        n_markets = len(event.get("markets", []))
         logger.info("-" * 50)
-        logger.info("Market: %s", question)
+        logger.info("Event: %s (%d buckets, $%.0f liq)", title, n_markets, event.get("total_liquidity", 0))
 
-        # Check if we've hit position limits
+        # Check limits
         if open_position_count >= config.MAX_OPEN_POSITIONS:
             logger.info("Max open positions reached (%d), skipping remaining", open_position_count)
             break
 
-        # Check hard stop
         if bankroll <= config.HARD_STOP_BANKROLL:
-            logger.warning(
-                "HARD STOP: Bankroll $%.2f <= $%.2f threshold. Pausing.",
-                bankroll, config.HARD_STOP_BANKROLL,
-            )
+            logger.warning("HARD STOP: Bankroll $%.2f <= $%.2f", bankroll, config.HARD_STOP_BANKROLL)
             break
-
-        # ── Pre-filter (free, no API call) ────────────────────────────────
-        skip_reason = _prefilter_market(market)
-        if skip_reason:
-            logger.info("  Pre-filter skip: %s", skip_reason)
-            cost_tracker.calls_skipped_prefilter += 1
-            continue
 
         # Step 2: Fetch weather data
         logger.info("  Fetching weather forecast...")
-        weather_data = fetch_weather_for_market(market)
+        weather_data = _fetch_weather_for_event(event)
         if weather_data is None:
-            logger.info("  No weather data available. Skipping.")
+            logger.info("  No weather data (can't identify city). Skipping.")
             cost_tracker.calls_skipped_prefilter += 1
-            log_analysis(question, {}, {"should_trade": False, "reason": "No weather data"})
             continue
 
-        # ── Check analysis cache ──────────────────────────────────────────
-        market_price_yes = market["outcome_prices"][0] if market["outcome_prices"] else 0.5
-        cached = cache.get(condition_id, market_price_yes)
+        # ── Check analysis cache (keyed by event slug) ────────────────────
+        # Use the average YES price across buckets as the cache price signal
+        all_yes_prices = [
+            s["outcome_prices"][0]
+            for s in event.get("outcome_summary", [])
+            if s.get("outcome_prices")
+        ]
+        avg_price = sum(all_yes_prices) / len(all_yes_prices) if all_yes_prices else 0.5
+
+        cached = cache.get(slug, avg_price)
         if cached is not None:
-            logger.info("  Using cached analysis (price hasn't moved enough)")
+            logger.info("  Using cached analysis (prices haven't moved enough)")
             cost_tracker.calls_skipped_cache += 1
-            analysis = AnalysisResult(**cached)
+            analysis = EventAnalysis(**cached)
         else:
             # ── Check daily API budget ────────────────────────────────────
             if cost_tracker.is_budget_exceeded():
                 logger.warning(
-                    "  Daily API budget $%.2f exceeded ($%.4f spent). Skipping Claude call.",
+                    "  Daily API budget $%.2f exceeded ($%.4f spent). Skipping.",
                     config.DAILY_API_BUDGET, cost_tracker.daily_cost,
                 )
                 cost_tracker.calls_skipped_budget += 1
                 continue
 
-            # Enrich with live CLOB prices
-            logger.info("  Fetching live CLOB prices...")
-            market = enrich_market_with_clob(market)
-
-            # Step 3: Claude analysis
-            logger.info("  Analyzing with Claude...")
-            analysis = analyze_market(market, weather_data, cost_tracker)
+            # Step 3: Claude analysis (one call for all buckets)
+            logger.info("  Analyzing %d buckets with Claude...", n_markets)
+            analysis = analyze_event(event, weather_data, cost_tracker)
             if analysis is None:
                 logger.warning("  Claude analysis failed. Skipping.")
-                log_analysis(question, {}, {"should_trade": False, "reason": "Analysis failed"})
+                log_analysis(title, {}, {"should_trade": False, "reason": "Analysis failed"})
                 continue
 
             # Cache the result
-            cache.put(condition_id, market_price_yes, analysis.to_dict())
+            cache.put(slug, avg_price, analysis.to_dict())
 
-        markets_analyzed += 1
-        logger.info(
-            "  Claude estimate: fair_value_yes=%.2f, confidence=%.2f",
-            analysis.fair_value_yes, analysis.confidence,
-        )
+        events_analyzed += 1
+        logger.info("  Confidence: %.2f", analysis.confidence)
         logger.info("  Reasoning: %s", analysis.reasoning)
 
-        # Step 4: Bet sizing
-        bet = calculate_bet(
-            fair_value_yes=analysis.fair_value_yes,
-            confidence=analysis.confidence,
-            market_price_yes=market_price_yes,
-            bankroll=bankroll,
-            open_positions=open_position_count,
-        )
+        # Log Claude's fair values vs market
+        for i, bucket in enumerate(analysis.buckets):
+            summaries = event.get("outcome_summary", [])
+            if i < len(summaries):
+                mkt_price = summaries[i]["outcome_prices"][0] if summaries[i]["outcome_prices"] else "?"
+                fair = bucket.get("fair_value_yes", 0)
+                edge = fair - float(mkt_price) if isinstance(mkt_price, (int, float)) else 0
+                marker = " <<<" if abs(edge) > config.MIN_EDGE_THRESHOLD else ""
+                logger.info(
+                    "    Bucket %d: fair=%.2f vs mkt=%.2f (edge=%+.2f)%s",
+                    i + 1, fair, float(mkt_price), edge, marker,
+                )
 
-        logger.info("  Sizing decision: %s", bet.reason)
+        # Step 4: Find the best trade across all buckets
+        best = _find_best_trade(event, analysis, bankroll, open_position_count)
 
-        if not bet.should_trade:
-            log_analysis(question, analysis.to_dict(), bet.to_dict())
+        if best is None:
+            logger.info("  No tradeable edge found in any bucket.")
+            log_analysis(title, analysis.to_dict(), {"should_trade": False, "reason": "No edge"})
             continue
 
+        bet = best["bet"]
+        summary = best["summary"]
+        market = best["market"]
         trades_attempted += 1
 
-        # Determine which token to buy
+        logger.info("  Best trade: %s", bet.reason)
+        logger.info("  Bucket: %s", summary["question"][:80])
+
+        # Determine token to buy
         if bet.side == "YES":
-            token_id = market["clob_token_ids"][0]
-            buy_price = market_price_yes
+            token_id = summary["clob_token_ids"][0] if summary["clob_token_ids"] else None
+            buy_price = best["market_price"]
         else:
-            token_id = market["clob_token_ids"][1] if len(market["clob_token_ids"]) > 1 else None
-            buy_price = 1 - market_price_yes
+            token_id = summary["clob_token_ids"][1] if len(summary["clob_token_ids"]) > 1 else None
+            buy_price = 1 - best["market_price"]
 
         if not token_id:
             logger.warning("  No token ID for %s side. Skipping.", bet.side)
-            log_analysis(question, analysis.to_dict(), bet.to_dict())
+            log_analysis(title, analysis.to_dict(), bet.to_dict())
             continue
 
         # Step 5: Execute trade
@@ -262,16 +311,15 @@ def run_cycle(
                 else:
                     logger.error("  Trade failed: %s", trade_result.get("error"))
 
-        log_analysis(question, analysis.to_dict(), bet.to_dict(), trade_result)
+        log_analysis(title, analysis.to_dict(), bet.to_dict(), trade_result)
 
     # ── Cycle summary ─────────────────────────────────────────────────────
-    log_scan_cycle(
-        cycle_num, len(markets), markets_analyzed, trades_attempted, trades_executed, bankroll
-    )
+    total_markets = sum(len(e.get("markets", [])) for e in events)
+    log_scan_cycle(cycle_num, total_markets, events_analyzed, trades_attempted, trades_executed, bankroll)
     logger.info("=" * 60)
     logger.info(
-        "Cycle %d complete: %d found, %d analyzed, %d trades attempted, %d executed",
-        cycle_num, len(markets), markets_analyzed, trades_attempted, trades_executed,
+        "Cycle %d complete: %d events (%d buckets), %d analyzed, %d trades attempted, %d executed",
+        cycle_num, len(events), total_markets, events_analyzed, trades_attempted, trades_executed,
     )
 
     # Cost & P&L summary
@@ -368,7 +416,6 @@ def main():
                 "Sleeping %d seconds until next cycle...",
                 config.SCAN_INTERVAL_SECONDS,
             )
-            # Sleep in short increments so we can respond to shutdown signals
             for _ in range(config.SCAN_INTERVAL_SECONDS):
                 if _shutdown:
                     break
