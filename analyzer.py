@@ -92,11 +92,13 @@ class AnalysisResult:
 def analyze_market(
     market: dict[str, Any],
     weather_data: dict[str, Any],
+    cost_tracker: "CostTracker | None" = None,
 ) -> AnalysisResult | None:
     """
     Send market + weather data to Claude for probability estimation.
 
     Returns an AnalysisResult or None on failure.
+    Optionally records token usage to a CostTracker.
     """
     if not config.CLAUDE_API_KEY:
         logger.error("CLAUDE_API_KEY not set in config.py")
@@ -111,16 +113,21 @@ def analyze_market(
         start = time.time()
         response = client.messages.create(
             model=config.CLAUDE_MODEL,
-            max_tokens=1024,
+            max_tokens=512,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
         elapsed = time.time() - start
+
+        in_tok = response.usage.input_tokens
+        out_tok = response.usage.output_tokens
+        call_cost = 0.0
+        if cost_tracker:
+            call_cost = cost_tracker.record_api_call(in_tok, out_tok)
+
         logger.info(
-            "Claude analysis took %.1fs (%d input, %d output tokens)",
-            elapsed,
-            response.usage.input_tokens,
-            response.usage.output_tokens,
+            "Claude analysis took %.1fs (%d in + %d out tokens = $%.4f)",
+            elapsed, in_tok, out_tok, call_cost,
         )
     except anthropic.APIError as e:
         logger.error("Claude API error: %s", e)
@@ -211,24 +218,24 @@ def _trim_weather_data(weather_data: dict[str, Any]) -> dict[str, Any]:
         if key in weather_data:
             trimmed[key] = weather_data[key]
 
-    # NWS data
+    # NWS data — aggressively trim to minimize tokens
     if "forecast" in weather_data:
-        trimmed["forecast"] = weather_data["forecast"][:10]  # 5 days
+        trimmed["forecast"] = weather_data["forecast"][:6]  # 3 days
     if "hourly" in weather_data:
-        trimmed["hourly"] = weather_data["hourly"][:24]  # 24 hours
+        trimmed["hourly"] = weather_data["hourly"][:12]  # 12 hours
     if "grid_data" in weather_data:
         grid = {}
         for k, v in weather_data["grid_data"].items():
             if v:
-                grid[k] = v[:14]  # ~7 days of twice-daily
+                grid[k] = v[:7]  # ~3-4 days
         trimmed["grid_data"] = grid
     if "current_observation" in weather_data:
         trimmed["current_observation"] = weather_data["current_observation"]
 
     # Open-Meteo data
     if "daily" in weather_data:
-        trimmed["daily"] = weather_data["daily"]
+        trimmed["daily"] = weather_data["daily"][:5]  # 5 days
     if "hourly" in weather_data and "hourly" not in trimmed:
-        trimmed["hourly"] = weather_data["hourly"][:48]
+        trimmed["hourly"] = weather_data["hourly"][:24]  # 24h
 
     return trimmed

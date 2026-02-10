@@ -34,10 +34,21 @@ MIN_LIQUIDITY = 500             # Skip markets with liquidity below this (USD)
 MAX_DAYS_TO_RESOLUTION = 30     # Skip markets resolving more than 30 days out
 MARKET_TAG = "weather"          # Polymarket event tag to filter
 
+# ── API cost management ───────────────────────────────────────────────────────
+# Sonnet pricing per million tokens (as of 2025)
+CLAUDE_INPUT_COST_PER_MTOK = 3.00    # $/MTok input
+CLAUDE_OUTPUT_COST_PER_MTOK = 15.00  # $/MTok output
+DAILY_API_BUDGET = 2.00              # Halt Claude calls if daily spend exceeds this
+ANALYSIS_CACHE_TTL_SECONDS = 1800    # Re-use cached analysis if market price moved < threshold
+CACHE_PRICE_MOVE_THRESHOLD = 0.03    # Only re-analyze if price moved more than 3%
+# Pre-filter: skip markets where YES price is this close to 0 or 1 (no edge possible)
+SKIP_EXTREME_PRICE_THRESHOLD = 0.04  # Skip if price < 0.04 or > 0.96
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_DIR = "logs"
 TRADE_LOG_FILE = "logs/trades.jsonl"
 BOT_LOG_FILE = "logs/bot.log"
+LEDGER_FILE = "logs/ledger.jsonl"
 
 # ── City coordinates for weather lookups ──────────────────────────────────────
 # (lat, lon, country_code)  — country_code "US" triggers NOAA, others use Open-Meteo
