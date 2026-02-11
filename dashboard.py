@@ -92,15 +92,14 @@ def api_status():
         if a.get("trade_result") and a["trade_result"].get("dry_run")
     ]
 
-    # Win rate from resolved trades (if any)
-    total_trades = len(executed_trades) + len(dry_run_trades)
+    # Win rate: count all trades (live + dry run) with positive edge
+    all_trades_with_decision = executed_trades + dry_run_trades
+    total_trades = len(all_trades_with_decision)
     wins = 0
     losses = 0
-    for a in analyses:
+    for a in all_trades_with_decision:
         bet = a.get("bet_decision", {})
-        tr = a.get("trade_result", {})
-        if tr.get("success") and bet.get("should_trade"):
-            # Count trades with positive edge as "potential wins" for display
+        if bet.get("should_trade"):
             if bet.get("edge", 0) > 0:
                 wins += 1
             else:
@@ -130,13 +129,27 @@ def api_status():
     total_markets_scanned = sum(c.get("markets_found", 0) for c in cycles)
     total_events_analyzed = sum(c.get("markets_analyzed", 0) for c in cycles)
 
-    # API costs from ledger
+    # API costs from ledger (or estimate from analysis records if ledger is empty)
     api_cost_total = latest_cost.get("total_api_cost_usd", 0.0)
     api_cost_today = latest_cost.get("daily_api_cost_usd", 0.0)
     api_calls = latest_cost.get("api_calls_made", 0)
     net_pnl = latest_cost.get("net_pnl_usd", 0.0)
     trade_cost = latest_cost.get("total_trade_cost_usd", 0.0)
     trade_revenue = latest_cost.get("total_trade_revenue_usd", 0.0)
+
+    # If ledger has no cost data, estimate from analysis records
+    if api_calls == 0 and analyses:
+        for a in analyses:
+            ana = a.get("analysis", {})
+            in_tok = ana.get("input_tokens", 0)
+            out_tok = ana.get("output_tokens", 0)
+            if in_tok or out_tok:
+                api_calls += 1
+                api_cost_total += (
+                    in_tok * config.CLAUDE_INPUT_COST_PER_MTOK / 1_000_000
+                    + out_tok * config.CLAUDE_OUTPUT_COST_PER_MTOK / 1_000_000
+                )
+        api_cost_today = api_cost_total
 
     # Session P&L = revenue - trade cost - api cost
     session_pnl = trade_revenue - trade_cost - api_cost_total
