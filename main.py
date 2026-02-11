@@ -16,6 +16,7 @@ import asyncio
 import logging
 import signal
 import sys
+import time as _time
 from typing import Any
 
 from clients.kalshi_svc import KalshiClient
@@ -111,6 +112,22 @@ async def run(settings: Settings) -> None:
         settings.max_total_exposure,
     )
 
+    # Parse series tickers for server-side filtering
+    series_list: list[str] = [
+        s.strip() for s in settings.series_tickers.split(",") if s.strip()
+    ]
+    if series_list:
+        logger.info("Server-side series filter: %s", ", ".join(series_list))
+    else:
+        logger.warning(
+            "No series_tickers configured — fetching ALL open markets every scan "
+            "(set SERIES_TICKERS in .env to reduce API usage)"
+        )
+
+    # Market list cache
+    cached_eligible: list[dict[str, Any]] = []
+    last_scan_time = 0.0
+
     try:
         cycle = 0
         while not shutdown_event.is_set():
@@ -137,21 +154,34 @@ async def run(settings: Settings) -> None:
                     risk_mgr.maybe_reset_daily()
                 continue
 
-            # Discover and filter markets
-            try:
-                raw_markets = await client.get_active_markets()
-            except Exception as exc:
-                risk_mgr.record_api_error()
-                logger.error("Market fetch failed: %s", exc)
-                await asyncio.sleep(30)
-                continue
+            # ── Market discovery (cached) ─────────────────────────────────
+            now = _time.monotonic()
+            scan_due = (now - last_scan_time) >= settings.market_scan_interval_secs
 
-            risk_mgr.record_api_success()
-            logger.info(
-                "Cycle %d: fetched %d open markets from Kalshi",
-                cycle, len(raw_markets),
-            )
-            eligible = mkt_filter.filter(raw_markets, risk_mgr)
+            if scan_due or not cached_eligible:
+                try:
+                    raw_markets = await _fetch_markets(client, series_list)
+                except Exception as exc:
+                    risk_mgr.record_api_error()
+                    logger.error("Market fetch failed: %s", exc)
+                    await asyncio.sleep(30)
+                    continue
+
+                risk_mgr.record_api_success()
+                logger.info(
+                    "Cycle %d: scanned %d markets from Kalshi",
+                    cycle, len(raw_markets),
+                )
+                cached_eligible = mkt_filter.filter(raw_markets, risk_mgr)
+                last_scan_time = now
+            else:
+                logger.info(
+                    "Cycle %d: reusing cached market list (%d markets, next scan in %ds)",
+                    cycle, len(cached_eligible),
+                    int(settings.market_scan_interval_secs - (now - last_scan_time)),
+                )
+
+            eligible = cached_eligible
 
             if not eligible:
                 logger.info("Cycle %d: no eligible markets — sleeping %ds",
@@ -213,6 +243,26 @@ async def run(settings: Settings) -> None:
             await client.close()
         await storage.close()
         logger.info("Shutdown complete")
+
+
+async def _fetch_markets(
+    client: Any, series_list: list[str]
+) -> list[dict[str, Any]]:
+    """Fetch markets, optionally scoped to specific series tickers."""
+    if not series_list:
+        return await client.get_active_markets()
+
+    # Fetch each series in parallel — much cheaper than fetching everything
+    tasks = [client.get_active_markets(series_ticker=s) for s in series_list]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    all_markets: list[dict[str, Any]] = []
+    for series, result in zip(series_list, results):
+        if isinstance(result, Exception):
+            logger.warning("Failed to fetch series %s: %s", series, result)
+        else:
+            all_markets.extend(result)
+    return all_markets
 
 
 async def _verify_categories(

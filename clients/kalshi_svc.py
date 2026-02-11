@@ -195,20 +195,32 @@ class KalshiClient:
         self,
         status: str = "open",
         limit: int = 200,
+        series_ticker: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Fetch all open markets (handles pagination)."""
+        """Fetch open markets (handles pagination).
+
+        If *series_ticker* is given the server filters to that series,
+        drastically reducing the number of pages returned.
+        """
         all_markets: list[dict] = []
         cursor = ""
+        pages = 0
         while True:
             params: dict[str, Any] = {"status": status, "limit": limit}
+            if series_ticker:
+                params["series_ticker"] = series_ticker
             if cursor:
                 params["cursor"] = cursor
             data = await self._get("/markets", params)
             markets = data.get("markets", [])
             all_markets.extend(markets)
             cursor = data.get("cursor", "")
+            pages += 1
             if not cursor or not markets:
                 break
+        logger.debug("Fetched %d markets in %d pages%s",
+                     len(all_markets), pages,
+                     f" (series={series_ticker})" if series_ticker else "")
         return all_markets
 
     async def get_market(self, ticker: str) -> dict[str, Any]:

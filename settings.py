@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     min_spread_net_cents: int = Field(default=2, ge=0)
     max_time_to_expiry_days: int = Field(default=30, ge=1)
 
+    # ── Market scanning ──────────────────────────────────────────────────
+    # Comma-separated series tickers to scan (e.g. "KXHIGHNY,KXHIGHCHI").
+    # Empty = fetch ALL open markets (expensive — ~50 paginated requests).
+    series_tickers: str = ""
+    # How often to re-scan for eligible markets (seconds).
+    # Between scans, the cached list is reused and only orderbooks refresh.
+    market_scan_interval_secs: int = Field(default=300, ge=10)
+
     # ── Strategy A: Market maker ─────────────────────────────────────────
     mm_quote_refresh_secs: float = Field(default=10.0, ge=1.0)
     mm_min_price_move_ticks: int = Field(default=1, ge=1)
