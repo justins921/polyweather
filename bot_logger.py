@@ -48,13 +48,37 @@ def setup_logging(verbose: bool = False) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+_current_session_id: str | None = None
+
+
+def set_session_id(session_id: str) -> None:
+    """Set the current session ID for all subsequent log records."""
+    global _current_session_id
+    _current_session_id = session_id
+
+
 def log_trade(record: dict[str, Any]) -> None:
     """Append a trade record to the JSONL trade log."""
     os.makedirs(config.LOG_DIR, exist_ok=True)
     record["timestamp"] = datetime.now(timezone.utc).isoformat()
+    if _current_session_id:
+        record["session_id"] = _current_session_id
 
     with open(config.TRADE_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, default=str) + "\n")
+
+
+def log_session_start(mode: str, bankroll: float) -> str:
+    """Log a session start marker. Returns the session ID."""
+    import uuid
+    session_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+    log_trade({
+        "type": "session_start",
+        "session_id": session_id,
+        "mode": mode,
+        "starting_bankroll": bankroll,
+    })
+    return session_id
 
 
 def log_scan_cycle(

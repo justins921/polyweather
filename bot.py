@@ -23,7 +23,7 @@ from typing import Any
 
 import config
 from analyzer import EventAnalysis, analyze_event
-from bot_logger import log_analysis, log_scan_cycle, setup_logging
+from bot_logger import log_analysis, log_scan_cycle, log_session_start, set_session_id, setup_logging
 from cost_tracker import AnalysisCache, CostTracker
 from executor import execute_trade, get_balance, get_clob_client, get_open_positions
 from scanner import fetch_weather_events
@@ -384,6 +384,12 @@ def main():
                 "Could not fetch balance, using configured starting bankroll: $%.2f",
                 bankroll,
             )
+
+    # Write session start marker for dashboard session/lifetime split
+    mode = "dry_run" if args.dry_run else "live"
+    session_id = log_session_start(mode, bankroll)
+    set_session_id(session_id)
+    logger.info("Session ID: %s", session_id)
 
     cycle_num = 0
 

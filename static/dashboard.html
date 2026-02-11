@@ -345,7 +345,7 @@ body {
   </div>
 </div>
 
-<!-- Top Stats -->
+<!-- Top Stats — Session -->
 <div class="stats-row">
   <div class="stat-card">
     <div class="stat-label">Balance</div>
@@ -355,17 +355,17 @@ body {
   <div class="stat-card">
     <div class="stat-label">Session P&L</div>
     <div class="stat-value neutral" id="st-pnl">$--</div>
-    <div class="stat-sub" id="st-pnl-sub">Net incl. API costs</div>
+    <div class="stat-sub" id="st-pnl-sub">Lifetime: $--</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">API Costs</div>
+    <div class="stat-label">Session API Costs</div>
     <div class="stat-value neutral" id="st-api">$--</div>
-    <div class="stat-sub" id="st-api-sub">-- calls | Budget: $--/day</div>
+    <div class="stat-sub" id="st-api-sub">Lifetime: $-- | Budget: $--/day</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Win Rate</div>
+    <div class="stat-label">Session Win Rate</div>
     <div class="stat-value neutral" id="st-winrate">--%</div>
-    <div class="stat-sub" id="st-winrate-sub">-- trades total</div>
+    <div class="stat-sub" id="st-winrate-sub">Lifetime: --% (-- trades)</div>
   </div>
 </div>
 
@@ -397,35 +397,42 @@ body {
   </div>
 </div>
 
-<!-- Bottom Stats -->
+<!-- Bottom Stats — Session -->
 <div class="bottom-stats">
   <div class="mini-stat">
-    <div class="stat-label">Total Trades</div>
+    <div class="stat-label">Session Trades</div>
     <div class="stat-value" id="ms-trades">0</div>
+    <div class="stat-sub" id="ms-trades-lt">Lifetime: 0</div>
   </div>
   <div class="mini-stat">
     <div class="stat-label">Markets Scanned</div>
     <div class="stat-value" id="ms-scanned">0</div>
+    <div class="stat-sub" id="ms-scanned-lt">Lifetime: 0</div>
   </div>
   <div class="mini-stat">
     <div class="stat-label">Avg Bet Size</div>
     <div class="stat-value" id="ms-avgbet">$0</div>
+    <div class="stat-sub" id="ms-avgbet-lt">Lifetime: $0</div>
   </div>
   <div class="mini-stat">
     <div class="stat-label">Best Edge</div>
     <div class="stat-value positive" id="ms-best">0%</div>
+    <div class="stat-sub" id="ms-best-lt">Lifetime: 0%</div>
   </div>
   <div class="mini-stat">
     <div class="stat-label">Worst Edge</div>
     <div class="stat-value" id="ms-worst">0%</div>
+    <div class="stat-sub" id="ms-worst-lt">Lifetime: 0%</div>
   </div>
   <div class="mini-stat">
-    <div class="stat-label">Cycles</div>
+    <div class="stat-label">Session Cycles</div>
     <div class="stat-value" id="ms-cycles">0</div>
+    <div class="stat-sub" id="ms-cycles-lt">Lifetime: 0</div>
   </div>
   <div class="mini-stat">
     <div class="stat-label">Avg Edge</div>
     <div class="stat-value" id="ms-avgedge">0%</div>
+    <div class="stat-sub" id="ms-avgedge-lt">Lifetime: 0%</div>
   </div>
 </div>
 
@@ -558,29 +565,42 @@ function pnlClass(v) {
 async function updateStatus() {
   try {
     const s = await fetchJSON('/api/status');
+    const sess = s.session;
+    const life = s.lifetime;
 
-    document.getElementById('st-balance').textContent = fmtDollar(s.bankroll);
+    // Balance
+    document.getElementById('st-balance').textContent = '$' + s.bankroll.toFixed(2);
     document.getElementById('st-balance').className = 'stat-value ' + pnlClass(s.bankroll - s.starting_bankroll);
     document.getElementById('st-balance-sub').textContent = `Starting: $${s.starting_bankroll.toFixed(2)} | Hard stop: $${s.hard_stop.toFixed(0)}`;
 
-    document.getElementById('st-pnl').textContent = fmtDollar(s.session_pnl);
-    document.getElementById('st-pnl').className = 'stat-value ' + pnlClass(s.session_pnl);
-    document.getElementById('st-pnl-sub').textContent = `Net incl. $${s.api_cost_total.toFixed(4)} API costs`;
+    // Session P&L (with lifetime in sub)
+    document.getElementById('st-pnl').textContent = fmtDollar(sess.pnl);
+    document.getElementById('st-pnl').className = 'stat-value ' + pnlClass(sess.pnl);
+    document.getElementById('st-pnl-sub').textContent = `Lifetime: ${fmtDollar(life.pnl)}`;
 
-    document.getElementById('st-api').textContent = '$' + s.api_cost_total.toFixed(4);
-    document.getElementById('st-api-sub').textContent = `${s.api_calls} calls | Today: $${s.api_cost_today.toFixed(4)}/$${s.daily_api_budget.toFixed(2)}`;
+    // API Costs (session main, lifetime in sub)
+    document.getElementById('st-api').textContent = '$' + sess.api_cost.toFixed(4);
+    document.getElementById('st-api-sub').textContent = `${sess.api_calls} calls | Lifetime: $${life.api_cost.toFixed(4)} | Budget: $${s.daily_api_budget.toFixed(2)}/day`;
 
-    document.getElementById('st-winrate').textContent = s.win_rate.toFixed(1) + '%';
-    document.getElementById('st-winrate-sub').textContent = `${s.total_trades} trades (${s.live_trades} live, ${s.dry_run_trades} dry run)`;
+    // Win Rate (session main, lifetime in sub)
+    document.getElementById('st-winrate').textContent = sess.win_rate.toFixed(1) + '%';
+    document.getElementById('st-winrate-sub').textContent = `${sess.total_trades} session trades | Lifetime: ${life.win_rate.toFixed(1)}% (${life.total_trades} trades)`;
 
-    // Bottom stats
-    document.getElementById('ms-trades').textContent = s.total_trades;
-    document.getElementById('ms-scanned').textContent = s.total_markets_scanned.toLocaleString();
-    document.getElementById('ms-avgbet').textContent = '$' + s.avg_bet_size.toFixed(2);
-    document.getElementById('ms-best').textContent = fmtPct(s.best_edge);
-    document.getElementById('ms-worst').textContent = fmtPct(s.worst_edge);
-    document.getElementById('ms-cycles').textContent = s.cycles_completed;
-    document.getElementById('ms-avgedge').textContent = fmtPct(s.avg_edge);
+    // Bottom stats — session values with lifetime below
+    document.getElementById('ms-trades').textContent = sess.total_trades;
+    document.getElementById('ms-trades-lt').textContent = `Lifetime: ${life.total_trades}`;
+    document.getElementById('ms-scanned').textContent = sess.total_markets_scanned.toLocaleString();
+    document.getElementById('ms-scanned-lt').textContent = `Lifetime: ${life.total_markets_scanned.toLocaleString()}`;
+    document.getElementById('ms-avgbet').textContent = '$' + sess.avg_bet_size.toFixed(2);
+    document.getElementById('ms-avgbet-lt').textContent = `Lifetime: $${life.avg_bet_size.toFixed(2)}`;
+    document.getElementById('ms-best').textContent = fmtPct(sess.best_edge);
+    document.getElementById('ms-best-lt').textContent = `Lifetime: ${fmtPct(life.best_edge)}`;
+    document.getElementById('ms-worst').textContent = fmtPct(sess.worst_edge);
+    document.getElementById('ms-worst-lt').textContent = `Lifetime: ${fmtPct(life.worst_edge)}`;
+    document.getElementById('ms-cycles').textContent = sess.cycles;
+    document.getElementById('ms-cycles-lt').textContent = `Lifetime: ${life.cycles}`;
+    document.getElementById('ms-avgedge').textContent = fmtPct(sess.avg_edge);
+    document.getElementById('ms-avgedge-lt').textContent = `Lifetime: ${fmtPct(life.avg_edge)}`;
 
     // Status dot
     document.getElementById('status-dot').className = 'status-dot';

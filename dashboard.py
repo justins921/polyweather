@@ -61,27 +61,16 @@ def index():
     return send_from_directory("static", "dashboard.html")
 
 
-@app.route("/api/status")
-def api_status():
-    """Current bot status: bankroll, P&L, API costs, win rate, key stats."""
-    trades = _read_jsonl(config.TRADE_LOG_FILE)
-    ledger = _read_jsonl(config.LEDGER_FILE)
-
-    # Extract scan cycles and analysis records
-    cycles = [r for r in trades if r.get("type") == "scan_cycle"]
-    analyses = [r for r in trades if r.get("type") == "analysis"]
-
-    # Current bankroll from latest cycle
+def _compute_stats(cycles: list[dict], analyses: list[dict]) -> dict:
+    """Compute trading stats from a set of cycles and analyses."""
     bankroll = config.STARTING_BANKROLL
     if cycles:
         bankroll = cycles[-1].get("bankroll", bankroll)
 
-    # Latest ledger entry for cost data
-    latest_cost = {}
-    if ledger:
-        latest_cost = ledger[-1]
+    starting_bankroll = config.STARTING_BANKROLL
+    if cycles:
+        starting_bankroll = cycles[0].get("bankroll", starting_bankroll)
 
-    # Trade stats
     executed_trades = [
         a for a in analyses
         if a.get("trade_result") and a["trade_result"].get("success")
@@ -92,7 +81,6 @@ def api_status():
         if a.get("trade_result") and a["trade_result"].get("dry_run")
     ]
 
-    # Win rate: count all trades (live + dry run) with positive edge
     all_trades_with_decision = executed_trades + dry_run_trades
     total_trades = len(all_trades_with_decision)
     wins = 0
@@ -104,10 +92,8 @@ def api_status():
                 wins += 1
             else:
                 losses += 1
-
     win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0.0
 
-    # Bet sizes
     bet_sizes = []
     edges = []
     for a in analyses:
@@ -121,61 +107,88 @@ def api_status():
                 edges.append(e)
 
     avg_bet = sum(bet_sizes) / len(bet_sizes) if bet_sizes else 0.0
-    best_trade = max(edges) if edges else 0.0
-    worst_trade = min(edges) if edges else 0.0
+    best_edge = max(edges) if edges else 0.0
+    worst_edge = min(edges) if edges else 0.0
     avg_edge = sum(edges) / len(edges) if edges else 0.0
 
-    # Total markets scanned
     total_markets_scanned = sum(c.get("markets_found", 0) for c in cycles)
-    total_events_analyzed = sum(c.get("markets_analyzed", 0) for c in cycles)
 
-    # API costs from ledger (or estimate from analysis records if ledger is empty)
-    api_cost_total = latest_cost.get("total_api_cost_usd", 0.0)
-    api_cost_today = latest_cost.get("daily_api_cost_usd", 0.0)
-    api_calls = latest_cost.get("api_calls_made", 0)
-    net_pnl = latest_cost.get("net_pnl_usd", 0.0)
-    trade_cost = latest_cost.get("total_trade_cost_usd", 0.0)
-    trade_revenue = latest_cost.get("total_trade_revenue_usd", 0.0)
+    # Estimate API costs from token usage in analysis records
+    api_calls = 0
+    api_cost = 0.0
+    for a in analyses:
+        ana = a.get("analysis", {})
+        in_tok = ana.get("input_tokens", 0)
+        out_tok = ana.get("output_tokens", 0)
+        if in_tok or out_tok:
+            api_calls += 1
+            api_cost += (
+                in_tok * config.CLAUDE_INPUT_COST_PER_MTOK / 1_000_000
+                + out_tok * config.CLAUDE_OUTPUT_COST_PER_MTOK / 1_000_000
+            )
 
-    # If ledger has no cost data, estimate from analysis records
-    if api_calls == 0 and analyses:
-        for a in analyses:
-            ana = a.get("analysis", {})
-            in_tok = ana.get("input_tokens", 0)
-            out_tok = ana.get("output_tokens", 0)
-            if in_tok or out_tok:
-                api_calls += 1
-                api_cost_total += (
-                    in_tok * config.CLAUDE_INPUT_COST_PER_MTOK / 1_000_000
-                    + out_tok * config.CLAUDE_OUTPUT_COST_PER_MTOK / 1_000_000
-                )
-        api_cost_today = api_cost_total
+    # Trade cost from executed trades
+    trade_cost = sum(
+        a.get("bet_decision", {}).get("size_usd", 0)
+        for a in executed_trades
+    )
 
-    # Session P&L = revenue - trade cost - api cost
-    session_pnl = trade_revenue - trade_cost - api_cost_total
-
-    return jsonify({
+    return {
         "bankroll": round(bankroll, 2),
-        "starting_bankroll": config.STARTING_BANKROLL,
-        "session_pnl": round(session_pnl, 4),
-        "api_cost_total": round(api_cost_total, 4),
-        "api_cost_today": round(api_cost_today, 4),
+        "starting_bankroll": round(starting_bankroll, 2),
+        "api_cost": round(api_cost, 4),
         "api_calls": api_calls,
         "win_rate": round(win_rate, 1),
         "total_trades": total_trades,
         "live_trades": len(executed_trades),
         "dry_run_trades": len(dry_run_trades),
         "total_markets_scanned": total_markets_scanned,
-        "total_events_analyzed": total_events_analyzed,
         "avg_bet_size": round(avg_bet, 2),
-        "best_edge": round(best_trade, 4),
-        "worst_edge": round(worst_trade, 4),
+        "best_edge": round(best_edge, 4),
+        "worst_edge": round(worst_edge, 4),
         "avg_edge": round(avg_edge, 4),
-        "net_pnl": round(net_pnl, 4),
-        "cycles_completed": len(cycles),
+        "trade_cost": round(trade_cost, 4),
+        "pnl": round(-trade_cost - api_cost, 4),  # negative until positions resolve
+        "cycles": len(cycles),
+    }
+
+
+@app.route("/api/status")
+def api_status():
+    """Current bot status with both session and lifetime stats."""
+    all_records = _read_jsonl(config.TRADE_LOG_FILE)
+
+    # Find the latest session start
+    session_starts = [r for r in all_records if r.get("type") == "session_start"]
+    latest_session_id = session_starts[-1].get("session_id") if session_starts else None
+
+    # Split records into session vs all
+    all_cycles = [r for r in all_records if r.get("type") == "scan_cycle"]
+    all_analyses = [r for r in all_records if r.get("type") == "analysis"]
+
+    if latest_session_id:
+        sess_cycles = [r for r in all_cycles if r.get("session_id") == latest_session_id]
+        sess_analyses = [r for r in all_analyses if r.get("session_id") == latest_session_id]
+    else:
+        sess_cycles = all_cycles
+        sess_analyses = all_analyses
+
+    session = _compute_stats(sess_cycles, sess_analyses)
+    lifetime = _compute_stats(all_cycles, all_analyses)
+
+    # Current bankroll from latest cycle overall
+    bankroll = config.STARTING_BANKROLL
+    if all_cycles:
+        bankroll = all_cycles[-1].get("bankroll", bankroll)
+
+    return jsonify({
+        "bankroll": round(bankroll, 2),
         "hard_stop": config.HARD_STOP_BANKROLL,
         "max_positions": config.MAX_OPEN_POSITIONS,
         "daily_api_budget": config.DAILY_API_BUDGET,
+        "starting_bankroll": config.STARTING_BANKROLL,
+        "session": session,
+        "lifetime": lifetime,
     })
 
 
