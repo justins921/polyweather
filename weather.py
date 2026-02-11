@@ -2,11 +2,14 @@
 Weather data fetcher.
 
 Uses NOAA/NWS API for US cities and Open-Meteo for international cities.
+Also provides observation-vs-threshold checks and city timezone helpers.
 """
 
 import logging
 import re
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -203,6 +206,7 @@ def fetch_open_meteo_forecast(lat: float, lon: float) -> dict[str, Any] | None:
     params = {
         "latitude": lat,
         "longitude": lon,
+        "current_weather": True,
         "hourly": "temperature_2m,precipitation_probability,precipitation,windspeed_10m",
         "daily": (
             "temperature_2m_max,temperature_2m_min,"
@@ -221,6 +225,16 @@ def fetch_open_meteo_forecast(lat: float, lon: float) -> dict[str, Any] | None:
         return None
 
     result: dict[str, Any] = {"source": "Open-Meteo"}
+
+    # Current weather snapshot (temperature, wind, weathercode)
+    current = data.get("current_weather")
+    if current:
+        result["current_weather"] = {
+            "temperature": current.get("temperature"),
+            "windspeed": current.get("windspeed"),
+            "weathercode": current.get("weathercode"),
+            "time": current.get("time"),
+        }
 
     # Daily summary
     daily = data.get("daily", {})
@@ -302,3 +316,231 @@ def fetch_weather_for_market(market: dict[str, Any]) -> dict[str, Any] | None:
 
     city_name, (lat, lon, country_code) = match
     return fetch_weather_for_city(city_name, lat, lon, country_code)
+
+
+# ── City timezone helpers ─────────────────────────────────────────────────────
+
+
+def get_city_timezone(city_name: str) -> ZoneInfo | None:
+    """Return the ZoneInfo for a known city, or None."""
+    tz_name = config.CITY_TIMEZONES.get(city_name.lower())
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except KeyError:
+            logger.warning("Unknown timezone %s for city %s", tz_name, city_name)
+    return None
+
+
+def hours_until_resolution_local(
+    close_time_iso: str, city_name: str
+) -> float | None:
+    """
+    Calculate hours until market resolution, with awareness of the city's
+    local timezone.  Returns None if inputs are invalid.
+
+    The duration is the same regardless of timezone, but we parse the close
+    time properly and return both the duration *and* log the local clock
+    so callers can reason about whether the observation window is over.
+    """
+    tz = get_city_timezone(city_name)
+    if tz is None:
+        return None
+
+    try:
+        close_utc = datetime.fromisoformat(close_time_iso.replace("Z", "+00:00"))
+        now_local = datetime.now(tz)
+        close_local = close_utc.astimezone(tz)
+        delta = (close_local - now_local).total_seconds() / 3600
+        return delta if delta > 0 else 0.0
+    except (ValueError, TypeError):
+        return None
+
+
+def local_time_info(city_name: str, close_time_iso: str | None) -> dict[str, Any]:
+    """
+    Return a dict with local-time context for a city + market close time.
+
+    Keys: local_now, local_close, hours_to_close, local_hour, tz_name.
+    Useful for logging and for deciding whether the weather day is effectively over.
+    """
+    tz = get_city_timezone(city_name)
+    if tz is None:
+        return {}
+
+    now_local = datetime.now(tz)
+    info: dict[str, Any] = {
+        "tz_name": str(tz),
+        "local_now": now_local.strftime("%Y-%m-%d %H:%M %Z"),
+        "local_hour": now_local.hour,
+    }
+
+    if close_time_iso:
+        try:
+            close_utc = datetime.fromisoformat(close_time_iso.replace("Z", "+00:00"))
+            close_local = close_utc.astimezone(tz)
+            info["local_close"] = close_local.strftime("%Y-%m-%d %H:%M %Z")
+            delta_h = (close_local - now_local).total_seconds() / 3600
+            info["hours_to_close"] = round(max(delta_h, 0), 2)
+        except (ValueError, TypeError):
+            pass
+
+    return info
+
+
+# ── Observation-vs-threshold check ────────────────────────────────────────────
+
+
+def parse_market_threshold(
+    question: str, ticker: str = ""
+) -> dict[str, Any] | None:
+    """
+    Extract the weather metric type and threshold from a market question or ticker.
+
+    Returns e.g. {"type": "high_temp", "threshold_f": 35, "direction": "above"}
+    or {"type": "rain"}, or None if unparseable.
+    """
+    # ── Try the ticker first (most reliable) ─────────────────────────────
+    # KXHIGHNY-26FEB11-B35  →  high temp, boundary 35°F
+    if ticker:
+        ticker_upper = ticker.upper()
+        m = re.search(r"KXHIGH\w*-\w+-B(\d+)", ticker_upper)
+        if m:
+            return {
+                "type": "high_temp",
+                "threshold_f": int(m.group(1)),
+                "direction": "above",
+            }
+        if "KXRAIN" in ticker_upper:
+            return {"type": "rain"}
+
+    # ── Fall back to parsing the question text ───────────────────────────
+    q = question.lower()
+
+    # "35° or above", "above 35°F", "35 degrees or higher", "≥ 35"
+    above_patterns = [
+        r"(\d+)\s*°?\s*f?\s*(?:or\s+)?(?:above|higher|more)",
+        r"(?:above|over|higher than|at least|≥|>=)\s*(\d+)\s*°?\s*f?",
+    ]
+    for pat in above_patterns:
+        m = re.search(pat, q)
+        if m:
+            return {
+                "type": "high_temp",
+                "threshold_f": int(m.group(1)),
+                "direction": "above",
+            }
+
+    # "below 35°", "under 35°F"
+    below_patterns = [
+        r"(\d+)\s*°?\s*f?\s*(?:or\s+)?(?:below|lower|less)",
+        r"(?:below|under|lower than|less than|<)\s*(\d+)\s*°?\s*f?",
+    ]
+    for pat in below_patterns:
+        m = re.search(pat, q)
+        if m:
+            return {
+                "type": "high_temp",
+                "threshold_f": int(m.group(1)),
+                "direction": "below",
+            }
+
+    if "rain" in q or "precipitation" in q:
+        return {"type": "rain"}
+
+    return None
+
+
+def check_observation_vs_threshold(
+    weather_data: dict[str, Any],
+    threshold_info: dict[str, Any],
+) -> dict[str, Any] | None:
+    """
+    Compare real-time observations against a market threshold to see
+    if the outcome is already determined.
+
+    For high-temp markets the daily high can only *increase* from the current
+    reading, so once the current temp meets the threshold the YES outcome
+    is locked in.
+
+    Returns a dict with keys:
+        outcome_known (bool), outcome ("YES"/"NO"),
+        observation_value, threshold, reason
+    or None if there is insufficient observation data.
+    """
+    if not threshold_info:
+        return None
+
+    # ── Temperature markets ──────────────────────────────────────────────
+    if threshold_info["type"] == "high_temp":
+        temp_c = _get_current_temp_c(weather_data)
+        if temp_c is None:
+            return None
+
+        current_f = temp_c * 9 / 5 + 32
+        threshold_f = threshold_info["threshold_f"]
+
+        if threshold_info.get("direction") == "above":
+            # High-temp can only go up; if already at/above threshold → YES
+            if current_f >= threshold_f:
+                return {
+                    "outcome_known": True,
+                    "outcome": "YES",
+                    "observation_value": round(current_f, 1),
+                    "threshold": threshold_f,
+                    "reason": (
+                        f"Current temp {current_f:.1f}°F already "
+                        f">= {threshold_f}°F threshold"
+                    ),
+                }
+        elif threshold_info.get("direction") == "below":
+            # If current temp is already at/above the threshold, the daily
+            # high will be >= threshold → "below X" is NO.
+            if current_f >= threshold_f:
+                return {
+                    "outcome_known": True,
+                    "outcome": "NO",
+                    "observation_value": round(current_f, 1),
+                    "threshold": threshold_f,
+                    "reason": (
+                        f"Current temp {current_f:.1f}°F already "
+                        f">= {threshold_f}°F, high can't be below"
+                    ),
+                }
+
+    # ── Rain markets ─────────────────────────────────────────────────────
+    elif threshold_info["type"] == "rain":
+        obs = weather_data.get("current_observation")
+        if obs and obs.get("description"):
+            desc = obs["description"].lower()
+            rain_keywords = [
+                "rain", "drizzle", "shower", "thunderstorm", "precipitation",
+            ]
+            if any(kw in desc for kw in rain_keywords):
+                return {
+                    "outcome_known": True,
+                    "outcome": "YES",
+                    "observation_value": obs["description"],
+                    "threshold": "any precipitation",
+                    "reason": f"Rain already observed: {obs['description']}",
+                }
+
+    return None
+
+
+def _get_current_temp_c(weather_data: dict[str, Any]) -> float | None:
+    """
+    Best-effort extraction of the current temperature in °C from whatever
+    weather data source is available (NWS observation → Open-Meteo current).
+    """
+    # NWS current observation
+    obs = weather_data.get("current_observation")
+    if obs and obs.get("temperature_c") is not None:
+        return float(obs["temperature_c"])
+
+    # Open-Meteo current_weather block
+    cw = weather_data.get("current_weather")
+    if cw and cw.get("temperature") is not None:
+        return float(cw["temperature"])
+
+    return None

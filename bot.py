@@ -28,7 +28,13 @@ from cost_tracker import AnalysisCache, CostTracker
 from executor import execute_trade, get_balance, get_clob_client, get_open_positions
 from scanner import fetch_weather_events
 from sizing import calculate_bet
-from weather import extract_city_from_question, fetch_weather_for_city
+from weather import (
+    check_observation_vs_threshold,
+    extract_city_from_question,
+    fetch_weather_for_city,
+    local_time_info,
+    parse_market_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +68,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _fetch_weather_for_event(event: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract city from event title or market questions and fetch weather."""
+def _fetch_weather_for_event(
+    event: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str]:
+    """
+    Extract city from event title or market questions and fetch weather.
+
+    Returns (weather_data, city_name).  city_name is "" when no city matched.
+    """
     # Try event title first, then individual market questions
     texts_to_try = [event.get("event_title", "")]
     for m in event.get("markets", []):
@@ -73,9 +85,10 @@ def _fetch_weather_for_event(event: dict[str, Any]) -> dict[str, Any] | None:
         match = extract_city_from_question(text)
         if match:
             city_name, (lat, lon, country_code) = match
-            return fetch_weather_for_city(city_name, lat, lon, country_code)
+            data = fetch_weather_for_city(city_name, lat, lon, country_code)
+            return data, city_name
 
-    return None
+    return None, ""
 
 
 def _find_best_trade(
@@ -190,11 +203,30 @@ def run_cycle(
 
         # Step 2: Fetch weather data
         logger.info("  Fetching weather forecast...")
-        weather_data = _fetch_weather_for_event(event)
+        weather_data, city_name = _fetch_weather_for_event(event)
         if weather_data is None:
             logger.info("  No weather data (can't identify city). Skipping.")
             cost_tracker.calls_skipped_prefilter += 1
             continue
+
+        # ── Local-timezone context ───────────────────────────────────────
+        end_date_str = event.get("end_date")
+        if not end_date_str:
+            # Grab from first market if event-level is missing
+            first_mkt = event.get("markets", [{}])[0]
+            end_date_str = first_mkt.get("end_date")
+
+        tz_info = local_time_info(city_name, end_date_str)
+        if tz_info:
+            logger.info(
+                "  Local time in %s: %s  (close: %s, %.1fh left)",
+                city_name.title(),
+                tz_info.get("local_now", "?"),
+                tz_info.get("local_close", "?"),
+                tz_info.get("hours_to_close", 0),
+            )
+            # Stash for downstream use (analyzer prompt, etc.)
+            weather_data["_local_time_info"] = tz_info
 
         # ── Check analysis cache (keyed by event slug) ────────────────────
         # Use the average YES price across buckets as the cache price signal
@@ -259,6 +291,29 @@ def run_cycle(
         bet = best["bet"]
         summary = best["summary"]
         market = best["market"]
+
+        # ── Step 4b: Observation check — is the outcome already known? ──
+        ticker = summary.get("condition_id", "")
+        threshold = parse_market_threshold(summary.get("question", ""), ticker)
+        if threshold:
+            obs_result = check_observation_vs_threshold(weather_data, threshold)
+            if obs_result and obs_result.get("outcome_known"):
+                logger.info(
+                    "  OBSERVATION CHECK: outcome already determined → %s "
+                    "(%s). Skipping trade.",
+                    obs_result["outcome"],
+                    obs_result["reason"],
+                )
+                log_analysis(
+                    title,
+                    analysis.to_dict(),
+                    {
+                        "should_trade": False,
+                        "reason": f"Outcome already known: {obs_result['reason']}",
+                    },
+                )
+                continue
+
         trades_attempted += 1
 
         logger.info("  Best trade: %s", bet.reason)
