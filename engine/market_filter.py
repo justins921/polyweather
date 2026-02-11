@@ -29,14 +29,33 @@ class MarketFilter:
     ) -> list[dict[str, Any]]:
         """Return only markets that pass all filters."""
         eligible = []
+        rejection_reasons: dict[str, int] = {}
         for m in markets:
             ok, reason = self.check(m, risk_mgr)
             if ok:
                 eligible.append(m)
             else:
+                # Bucket by reason prefix for summary
+                bucket = reason.split("=")[0].split("(")[0].strip()
+                rejection_reasons[bucket] = rejection_reasons.get(bucket, 0) + 1
                 logger.debug(
                     "Filtered out %s: %s", m.get("ticker", "?"), reason,
                 )
+
+        # Log filtering summary at INFO level
+        if markets:
+            top_reasons = sorted(rejection_reasons.items(), key=lambda x: -x[1])[:5]
+            reasons_str = ", ".join(f"{r}: {c}" for r, c in top_reasons)
+            logger.info(
+                "Filter: %d/%d markets eligible  [rejected: %s]",
+                len(eligible), len(markets), reasons_str or "none",
+            )
+            if eligible:
+                tickers = [m.get("ticker", "?") for m in eligible[:10]]
+                logger.info("Eligible markets: %s%s",
+                            ", ".join(tickers),
+                            f" (+{len(eligible)-10} more)" if len(eligible) > 10 else "")
+
         return eligible
 
     def check(

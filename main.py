@@ -147,17 +147,23 @@ async def run(settings: Settings) -> None:
                 continue
 
             risk_mgr.record_api_success()
+            logger.info(
+                "Cycle %d: fetched %d open markets from Kalshi",
+                cycle, len(raw_markets),
+            )
             eligible = mkt_filter.filter(raw_markets, risk_mgr)
 
             if not eligible:
-                logger.info("Cycle %d: no eligible markets", cycle)
+                logger.info("Cycle %d: no eligible markets — sleeping %ds",
+                            cycle, 30)
                 try:
                     await asyncio.wait_for(shutdown_event.wait(), timeout=30)
                 except asyncio.TimeoutError:
                     pass
                 continue
 
-            logger.info("Cycle %d: %d eligible markets", cycle, len(eligible))
+            logger.info("Cycle %d: processing %d eligible markets with both strategies",
+                        cycle, len(eligible))
 
             # Run strategies concurrently
             tasks = []
@@ -166,6 +172,7 @@ async def run(settings: Settings) -> None:
                 tasks.append(er_strategy.process_market(mkt))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            errors = sum(1 for r in results if isinstance(r, Exception))
             for r in results:
                 if isinstance(r, Exception):
                     logger.error("Strategy error: %s", r, exc_info=r)
@@ -173,6 +180,19 @@ async def run(settings: Settings) -> None:
 
             # Persist state
             await storage.flush()
+
+            # Cycle summary
+            risk_summary = risk_mgr.summary()
+            logger.info(
+                "Cycle %d done: daily_loss=$%.2f/%s%.2f  exposure=$%.2f/$%.2f  errors=%d  next_cycle=%ds",
+                cycle,
+                risk_summary.get("daily_loss", 0), "-" if risk_summary.get("daily_loss", 0) > 0 else "",
+                settings.max_daily_loss,
+                risk_summary.get("total_exposure", 0),
+                settings.max_total_exposure,
+                errors,
+                int(settings.mm_quote_refresh_secs),
+            )
 
             # Sleep between cycles
             try:

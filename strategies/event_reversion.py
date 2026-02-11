@@ -97,6 +97,8 @@ class EventReversionStrategy:
 
         # Need enough data
         if len(window.prices) < self._s.er_rolling_window:
+            logger.debug("ER %s: building window (%d/%d samples)",
+                         ticker, len(window.prices), self._s.er_rolling_window)
             return
 
         # Check existing position for exit
@@ -110,15 +112,20 @@ class EventReversionStrategy:
         std = prices[-self._s.er_rolling_window :].std()
 
         if std < 0.5:
-            return  # no volatility, skip
+            logger.debug("ER skip %s: no volatility (std=%.2f)", ticker, std)
+            return
 
         zscore = (mid - mean) / std
 
         if abs(zscore) < self._s.er_entry_zscore:
-            return  # no signal
+            logger.debug("ER %s: no signal (zscore=%.2f, need ±%.1f, mid=%.0f, mean=%.1f)",
+                         ticker, zscore, self._s.er_entry_zscore, mid, mean)
+            return
 
         # Net edge gate
         if not self._fee.passes_gate(best_bid, best_ask, is_maker=True):
+            logger.info("ER skip %s: signal (z=%.2f) but no edge (bid=%d ask=%d)",
+                        ticker, zscore, best_bid, best_ask)
             return
 
         # Determine side: if price spiked UP (zscore > 0), bet on reversion DOWN → buy NO

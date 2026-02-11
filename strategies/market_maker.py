@@ -105,22 +105,25 @@ class MarketMakerStrategy:
 
         # Depth check
         if bid_depth < self._s.min_book_depth and ask_depth < self._s.min_book_depth:
-            logger.debug("Skipping %s: insufficient depth (bid=%d, ask=%d)",
-                         ticker, bid_depth, ask_depth)
+            logger.info("MM skip %s: thin book (bid_depth=%d, ask_depth=%d)",
+                        ticker, bid_depth, ask_depth)
             return
 
         mid = (best_bid + best_ask) / 2.0
+        spread = best_ask - best_bid
+        net_edge = self._fee.net_edge_cents(best_bid, best_ask, is_maker=True)
 
         # ── Adverse selection check ──────────────────────────────────────
         if self._risk.check_adverse_selection(ticker, int(mid)):
+            logger.info("MM skip %s: adverse selection detected — pulling quotes", ticker)
             await self._pull_quotes(ticker)
             return
 
         # ── Net edge gate ────────────────────────────────────────────────
         if not self._fee.passes_gate(best_bid, best_ask, is_maker=True):
-            logger.debug(
-                "Skipping %s: net_edge <= 0 (bid=%d ask=%d)",
-                ticker, best_bid, best_ask,
+            logger.info(
+                "MM skip %s: negative edge (bid=%d ask=%d spread=%d edge=%.2f¢)",
+                ticker, best_bid, best_ask, spread, net_edge,
             )
             await self._pull_quotes(ticker)
             return
@@ -140,6 +143,7 @@ class MarketMakerStrategy:
         count = self._compute_size(ticker, bid_price, market)
 
         if count <= 0:
+            logger.info("MM skip %s: size=0 (exposure limit reached)", ticker)
             await self._pull_quotes(ticker)
             return
 
@@ -149,6 +153,11 @@ class MarketMakerStrategy:
 
         if state and not self._needs_refresh(state, bid_price, ask_price, now):
             return
+
+        logger.info(
+            "MM quote %s: bid=%d ask=%d size=%d mid=%.0f spread=%d edge=%.2f¢ inv=%d",
+            ticker, bid_price, ask_price, count, mid, spread, net_edge, net_contracts,
+        )
 
         # ── Place/update quotes ──────────────────────────────────────────
         await self._update_quotes(
