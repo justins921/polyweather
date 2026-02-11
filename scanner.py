@@ -134,6 +134,11 @@ def _parse_event(
         logger.debug("Skipping event '%s' — resolves in %.0f days", event_title, days_to_resolution)
         return None
 
+    # Filter: skip events that resolve too soon (outcome likely already known)
+    if days_to_resolution is not None and days_to_resolution < config.MIN_HOURS_TO_RESOLUTION / 24:
+        logger.debug("Skipping event '%s' — resolves in %.1f hours", event_title, days_to_resolution * 24)
+        return None
+
     # Total volume across all markets in the event
     total_volume = sum(m.get("volume", 0) for m in markets)
 
@@ -182,6 +187,11 @@ def _parse_market(market: dict[str, Any]) -> dict[str, Any] | None:
 
         no_price = 1.0 - yes_price
 
+        # Skip extreme prices — outcome is near-certain, no edge
+        if yes_price < config.SKIP_EXTREME_PRICE_THRESHOLD or yes_price > (1 - config.SKIP_EXTREME_PRICE_THRESHOLD):
+            logger.debug("Skipping market '%s' — extreme price %.3f", ticker, yes_price)
+            return None
+
         # Question text
         question = market.get("title", "") or market.get("yes_sub_title", "") or ticker
         subtitle = market.get("yes_sub_title", "")
@@ -201,6 +211,10 @@ def _parse_market(market: dict[str, Any]) -> dict[str, Any] | None:
                 days_to_resolution = (end_date - now).total_seconds() / 86400
                 if days_to_resolution < 0:
                     return None  # already closed
+                if days_to_resolution < config.MIN_HOURS_TO_RESOLUTION / 24:
+                    logger.debug("Skipping market '%s' — resolves in %.1f hours (min %d)",
+                                 ticker, days_to_resolution * 24, config.MIN_HOURS_TO_RESOLUTION)
+                    return None  # too close to resolution, outcome likely known
             except ValueError:
                 pass
 

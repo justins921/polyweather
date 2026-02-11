@@ -47,6 +47,7 @@ KELLY_FRACTION = 0.25           # Quarter-Kelly
 # ── Scanning parameters ──────────────────────────────────────────────────────
 SCAN_INTERVAL_SECONDS = 1800    # 30 minutes
 MAX_DAYS_TO_RESOLUTION = 30     # Skip markets resolving more than 30 days out
+MIN_HOURS_TO_RESOLUTION = 6     # Skip markets resolving within 6 hours (outcome likely known)
 
 # ── API cost management ───────────────────────────────────────────────────────
 # Sonnet pricing per million tokens (as of 2025)
