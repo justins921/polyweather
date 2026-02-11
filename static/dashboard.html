@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Polyweather Trading Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-primary: #0f1117;
+  --bg-card: #1a1d27;
+  --bg-card-hover: #22263a;
+  --border: #2a2e3f;
+  --text-primary: #e4e6ed;
+  --text-secondary: #8b8fa3;
+  --text-muted: #5a5e72;
+  --accent-green: #22c55e;
+  --accent-green-dim: rgba(34,197,94,0.15);
+  --accent-red: #ef4444;
+  --accent-red-dim: rgba(239,68,68,0.15);
+  --accent-blue: #3b82f6;
+  --accent-blue-dim: rgba(59,130,246,0.15);
+  --accent-yellow: #eab308;
+  --accent-yellow-dim: rgba(234,179,8,0.15);
+  --accent-purple: #a855f7;
+  --accent-purple-dim: rgba(168,85,247,0.15);
+  --radius: 12px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  padding: 20px 24px;
+}
+
+/* ── Header ───────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header h1 .icon { font-size: 24px; }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  display: inline-block;
+  animation: pulse 2s infinite;
+}
+
+.status-dot.offline { background: var(--text-muted); animation: none; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.refresh-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ── Top Stats Row ────────────────────────────────────────────────── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  box-shadow: var(--shadow);
+  transition: background 0.2s;
+}
+
+.stat-card:hover { background: var(--bg-card-hover); }
+
+.stat-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.positive { color: var(--accent-green); }
+.negative { color: var(--accent-red); }
+.neutral { color: var(--text-primary); }
+
+/* ── Main Grid (Chart + Activity) ─────────────────────────────────── */
+.main-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.panel-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.panel-badge.green { background: var(--accent-green-dim); color: var(--accent-green); }
+.panel-badge.blue { background: var(--accent-blue-dim); color: var(--accent-blue); }
+
+/* ── Chart Panel ──────────────────────────────────────────────────── */
+.chart-container {
+  padding: 14px 18px 18px;
+  height: 320px;
+  position: relative;
+}
+
+.chart-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── Activity Panel ───────────────────────────────────────────────── */
+.activity-list {
+  max-height: 345px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.activity-list::-webkit-scrollbar { width: 6px; }
+.activity-list::-webkit-scrollbar-track { background: transparent; }
+.activity-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid rgba(42,46,63,0.5);
+  font-size: 12px;
+  line-height: 1.5;
+  transition: background 0.15s;
+}
+
+.activity-item:hover { background: rgba(255,255,255,0.02); }
+
+.activity-time {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  width: 60px;
+}
+
+.activity-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+.activity-icon.scan { background: var(--accent-blue-dim); color: var(--accent-blue); }
+.activity-icon.trade { background: var(--accent-green-dim); color: var(--accent-green); }
+.activity-icon.skip { background: var(--accent-yellow-dim); color: var(--accent-yellow); }
+.activity-icon.error { background: var(--accent-red-dim); color: var(--accent-red); }
+.activity-icon.info { background: var(--accent-purple-dim); color: var(--accent-purple); }
+
+.activity-msg {
+  flex: 1;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.activity-msg strong { color: var(--text-primary); font-weight: 600; }
+
+/* ── Bottom Stats Row ─────────────────────────────────────────────── */
+.bottom-stats {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 14px;
+}
+
+.mini-stat {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+.mini-stat .stat-label { margin-bottom: 4px; }
+.mini-stat .stat-value { font-size: 18px; }
+
+/* ── Trade Table ──────────────────────────────────────────────────── */
+.trade-table-wrap {
+  margin-top: 20px;
+}
+
+.trade-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.trade-table thead th {
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.trade-table tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(42,46,63,0.4);
+  color: var(--text-secondary);
+}
+
+.trade-table tbody tr:hover { background: var(--bg-card-hover); }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge.yes { background: var(--accent-green-dim); color: var(--accent-green); }
+.badge.no { background: var(--accent-red-dim); color: var(--accent-red); }
+.badge.skip { background: rgba(255,255,255,0.05); color: var(--text-muted); }
+.badge.dry { background: var(--accent-yellow-dim); color: var(--accent-yellow); }
+
+/* ── Responsive ───────────────────────────────────────────────────── */
+@media (max-width: 1200px) {
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+  .bottom-stats { grid-template-columns: repeat(4, 1fr); }
+}
+
+@media (max-width: 900px) {
+  .main-grid { grid-template-columns: 1fr; }
+  .bottom-stats { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 600px) {
+  .stats-row { grid-template-columns: 1fr; }
+  .bottom-stats { grid-template-columns: repeat(2, 1fr); }
+  body { padding: 12px; }
+}
+
+/* ── Empty state ──────────────────────────────────────────────────── */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.empty-state .icon { font-size: 32px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>
+    <span class="icon">&#9928;</span>
+    Polyweather Dashboard
+  </h1>
+  <div class="header-right">
+    <span class="refresh-label" id="last-refresh">Connecting...</span>
+    <span class="status-dot offline" id="status-dot"></span>
+  </div>
+</div>
+
+<!-- Top Stats -->
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-label">Balance</div>
+    <div class="stat-value neutral" id="st-balance">$--</div>
+    <div class="stat-sub" id="st-balance-sub">Starting: $--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Session P&L</div>
+    <div class="stat-value neutral" id="st-pnl">$--</div>
+    <div class="stat-sub" id="st-pnl-sub">Net incl. API costs</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">API Costs</div>
+    <div class="stat-value neutral" id="st-api">$--</div>
+    <div class="stat-sub" id="st-api-sub">-- calls | Budget: $--/day</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Win Rate</div>
+    <div class="stat-value neutral" id="st-winrate">--%</div>
+    <div class="stat-sub" id="st-winrate-sub">-- trades total</div>
+  </div>
+</div>
+
+<!-- Main Grid: Chart + Activity -->
+<div class="main-grid">
+  <!-- Balance Chart -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Balance History</span>
+      <span class="panel-badge blue" id="chart-cycles">0 cycles</span>
+    </div>
+    <div class="chart-container">
+      <canvas id="balanceChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Activity Log -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Activity Log</span>
+      <span class="panel-badge green" id="activity-count">0 entries</span>
+    </div>
+    <div class="activity-list" id="activity-list">
+      <div class="empty-state">
+        <div class="icon">&#128203;</div>
+        Waiting for bot activity...
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom Stats -->
+<div class="bottom-stats">
+  <div class="mini-stat">
+    <div class="stat-label">Total Trades</div>
+    <div class="stat-value" id="ms-trades">0</div>
+  </div>
+  <div class="mini-stat">
+    <div class="stat-label">Markets Scanned</div>
+    <div class="stat-value" id="ms-scanned">0</div>
+  </div>
+  <div class="mini-stat">
+    <div class="stat-label">Avg Bet Size</div>
+    <div class="stat-value" id="ms-avgbet">$0</div>
+  </div>
+  <div class="mini-stat">
+    <div class="stat-label">Best Edge</div>
+    <div class="stat-value positive" id="ms-best">0%</div>
+  </div>
+  <div class="mini-stat">
+    <div class="stat-label">Worst Edge</div>
+    <div class="stat-value" id="ms-worst">0%</div>
+  </div>
+  <div class="mini-stat">
+    <div class="stat-label">Cycles</div>
+    <div class="stat-value" id="ms-cycles">0</div>
+  </div>
+  <div class="mini-stat">
+    <div class="stat-label">Avg Edge</div>
+    <div class="stat-value" id="ms-avgedge">0%</div>
+  </div>
+</div>
+
+<!-- Recent Trades Table -->
+<div class="trade-table-wrap panel" style="margin-top:20px;">
+  <div class="panel-header">
+    <span class="panel-title">Recent Trade Decisions</span>
+    <span class="panel-badge blue" id="trade-count">0 trades</span>
+  </div>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Market</th>
+        <th>Side</th>
+        <th>Size</th>
+        <th>Edge</th>
+        <th>Status</th>
+        <th>Reason</th>
+      </tr>
+    </thead>
+    <tbody id="trade-body">
+      <tr><td colspan="7" class="empty-state">No trade decisions yet</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+// ── Chart Setup ────────────────────────────────────────────────────
+let balanceChart = null;
+
+function initChart() {
+  const ctx = document.getElementById('balanceChart').getContext('2d');
+
+  const gradient = ctx.createLinearGradient(0, 0, 0, 280);
+  gradient.addColorStop(0, 'rgba(59, 130, 246, 0.25)');
+  gradient.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
+
+  balanceChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Balance ($)',
+        data: [],
+        borderColor: '#3b82f6',
+        backgroundColor: gradient,
+        borderWidth: 2,
+        fill: true,
+        tension: 0.3,
+        pointRadius: 3,
+        pointBackgroundColor: '#3b82f6',
+        pointBorderColor: '#1a1d27',
+        pointBorderWidth: 2,
+        pointHoverRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        intersect: false,
+        mode: 'index',
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1d27',
+          borderColor: '#2a2e3f',
+          borderWidth: 1,
+          titleColor: '#e4e6ed',
+          bodyColor: '#8b8fa3',
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: function(ctx) {
+              return `Balance: $${ctx.parsed.y.toFixed(2)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(42,46,63,0.4)', drawBorder: false },
+          ticks: { color: '#5a5e72', font: { size: 11 }, maxRotation: 0, maxTicksLimit: 8 },
+        },
+        y: {
+          grid: { color: 'rgba(42,46,63,0.4)', drawBorder: false },
+          ticks: {
+            color: '#5a5e72',
+            font: { size: 11 },
+            callback: v => '$' + v.toFixed(0),
+          },
+          beginAtZero: false,
+        }
+      }
+    }
+  });
+}
+
+// ── Data Fetching ──────────────────────────────────────────────────
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function fmtDollar(v) {
+  if (v === null || v === undefined) return '$--';
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : (v > 0 ? '+' : '');
+  if (abs < 0.01 && abs > 0) return sign + '$' + abs.toFixed(4);
+  return sign + '$' + abs.toFixed(2);
+}
+
+function fmtPct(v) {
+  if (v === null || v === undefined) return '--%';
+  return (v * 100).toFixed(1) + '%';
+}
+
+function pnlClass(v) {
+  if (v > 0.001) return 'positive';
+  if (v < -0.001) return 'negative';
+  return 'neutral';
+}
+
+// ── Update Functions ───────────────────────────────────────────────
+
+async function updateStatus() {
+  try {
+    const s = await fetchJSON('/api/status');
+
+    document.getElementById('st-balance').textContent = fmtDollar(s.bankroll);
+    document.getElementById('st-balance').className = 'stat-value ' + pnlClass(s.bankroll - s.starting_bankroll);
+    document.getElementById('st-balance-sub').textContent = `Starting: $${s.starting_bankroll.toFixed(2)} | Hard stop: $${s.hard_stop.toFixed(0)}`;
+
+    document.getElementById('st-pnl').textContent = fmtDollar(s.session_pnl);
+    document.getElementById('st-pnl').className = 'stat-value ' + pnlClass(s.session_pnl);
+    document.getElementById('st-pnl-sub').textContent = `Net incl. $${s.api_cost_total.toFixed(4)} API costs`;
+
+    document.getElementById('st-api').textContent = '$' + s.api_cost_total.toFixed(4);
+    document.getElementById('st-api-sub').textContent = `${s.api_calls} calls | Today: $${s.api_cost_today.toFixed(4)}/$${s.daily_api_budget.toFixed(2)}`;
+
+    document.getElementById('st-winrate').textContent = s.win_rate.toFixed(1) + '%';
+    document.getElementById('st-winrate-sub').textContent = `${s.total_trades} trades (${s.live_trades} live, ${s.dry_run_trades} dry run)`;
+
+    // Bottom stats
+    document.getElementById('ms-trades').textContent = s.total_trades;
+    document.getElementById('ms-scanned').textContent = s.total_markets_scanned.toLocaleString();
+    document.getElementById('ms-avgbet').textContent = '$' + s.avg_bet_size.toFixed(2);
+    document.getElementById('ms-best').textContent = fmtPct(s.best_edge);
+    document.getElementById('ms-worst').textContent = fmtPct(s.worst_edge);
+    document.getElementById('ms-cycles').textContent = s.cycles_completed;
+    document.getElementById('ms-avgedge').textContent = fmtPct(s.avg_edge);
+
+    // Status dot
+    document.getElementById('status-dot').className = 'status-dot';
+    return true;
+  } catch (e) {
+    document.getElementById('status-dot').className = 'status-dot offline';
+    console.error('Status fetch error:', e);
+    return false;
+  }
+}
+
+async function updateChart() {
+  try {
+    const history = await fetchJSON('/api/history');
+    if (!balanceChart) return;
+
+    const labels = history.map(h => {
+      if (h.timestamp) {
+        const d = new Date(h.timestamp);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      return `Cycle ${h.cycle}`;
+    });
+
+    const data = history.map(h => h.bankroll);
+
+    balanceChart.data.labels = labels;
+    balanceChart.data.datasets[0].data = data;
+    balanceChart.update('none');
+
+    document.getElementById('chart-cycles').textContent = `${history.length} cycles`;
+  } catch (e) {
+    console.error('Chart fetch error:', e);
+  }
+}
+
+function classifyLogLine(msg) {
+  const m = msg.toLowerCase();
+  if (m.includes('scanning') || m.includes('scan') || m.includes('found') && m.includes('event')) return 'scan';
+  if (m.includes('executing') || m.includes('trade') || m.includes('buy')) return 'trade';
+  if (m.includes('skip') || m.includes('no edge') || m.includes('no weather') || m.includes('no trad')) return 'skip';
+  if (m.includes('error') || m.includes('fail') || m.includes('exception')) return 'error';
+  return 'info';
+}
+
+function iconForClass(cls) {
+  switch(cls) {
+    case 'scan': return '&#128269;';
+    case 'trade': return '&#128200;';
+    case 'skip': return '&#9888;';
+    case 'error': return '&#10060;';
+    default: return '&#8226;';
+  }
+}
+
+async function updateActivity() {
+  try {
+    const entries = await fetchJSON('/api/activity');
+    const list = document.getElementById('activity-list');
+
+    if (!entries || entries.length === 0) {
+      list.innerHTML = '<div class="empty-state"><div class="icon">&#128203;</div>Waiting for bot activity...</div>';
+      document.getElementById('activity-count').textContent = '0 entries';
+      return;
+    }
+
+    // Filter to interesting lines only
+    const interesting = entries.filter(e => {
+      const msg = (e.message || e.raw || '').toLowerCase();
+      return (
+        msg.includes('cycle') ||
+        msg.includes('event') ||
+        msg.includes('trade') ||
+        msg.includes('buy') ||
+        msg.includes('edge') ||
+        msg.includes('weather') ||
+        msg.includes('analyz') ||
+        msg.includes('bucket') ||
+        msg.includes('scan') ||
+        msg.includes('error') ||
+        msg.includes('fail') ||
+        msg.includes('skip') ||
+        msg.includes('bankroll') ||
+        msg.includes('confidence') ||
+        msg.includes('sleeping') ||
+        msg.includes('dry run') ||
+        msg.includes('hard stop') ||
+        msg.includes('starting') ||
+        msg.includes('cost') ||
+        msg.includes('p&l') ||
+        msg.includes('api')
+      );
+    }).slice(0, 60);
+
+    let html = '';
+    for (const e of interesting) {
+      const msg = e.message || e.raw || '';
+      const time = e.timestamp || '';
+      const timeShort = time.split(' ').pop() || '';
+      const cls = classifyLogLine(msg);
+
+      html += `
+        <div class="activity-item">
+          <span class="activity-time">${timeShort}</span>
+          <span class="activity-icon ${cls}">${iconForClass(cls)}</span>
+          <span class="activity-msg">${escapeHtml(msg)}</span>
+        </div>`;
+    }
+
+    list.innerHTML = html;
+    document.getElementById('activity-count').textContent = `${interesting.length} entries`;
+  } catch (e) {
+    console.error('Activity fetch error:', e);
+  }
+}
+
+async function updateTrades() {
+  try {
+    const trades = await fetchJSON('/api/trades');
+    const tbody = document.getElementById('trade-body');
+
+    if (!trades || trades.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No trade decisions yet</td></tr>';
+      document.getElementById('trade-count').textContent = '0 trades';
+      return;
+    }
+
+    let html = '';
+    for (const t of trades.slice(0, 20)) {
+      const time = t.timestamp ? new Date(t.timestamp).toLocaleString([], {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      }) : '--';
+
+      const market = (t.market || '').substring(0, 60) + (t.market && t.market.length > 60 ? '...' : '');
+
+      let sideBadge = '';
+      if (t.should_trade && t.side) {
+        sideBadge = `<span class="badge ${t.side.toLowerCase()}">${t.side}</span>`;
+      } else {
+        sideBadge = '<span class="badge skip">SKIP</span>';
+      }
+
+      let statusBadge = '';
+      if (t.dry_run) {
+        statusBadge = '<span class="badge dry">DRY RUN</span>';
+      } else if (t.trade_success === true) {
+        statusBadge = '<span class="badge yes">FILLED</span>';
+      } else if (t.trade_success === false) {
+        statusBadge = '<span class="badge no">FAILED</span>';
+      } else if (!t.should_trade) {
+        statusBadge = '<span class="badge skip">SKIPPED</span>';
+      } else {
+        statusBadge = '--';
+      }
+
+      html += `
+        <tr>
+          <td>${time}</td>
+          <td title="${escapeHtml(t.market || '')}">${escapeHtml(market)}</td>
+          <td>${sideBadge}</td>
+          <td>${t.size_usd > 0 ? '$' + t.size_usd.toFixed(2) : '--'}</td>
+          <td class="${t.edge > 0 ? 'positive' : ''}">${t.edge > 0 ? fmtPct(t.edge) : '--'}</td>
+          <td>${statusBadge}</td>
+          <td title="${escapeHtml(t.reason || '')}">${escapeHtml((t.reason || '').substring(0, 50))}</td>
+        </tr>`;
+    }
+
+    tbody.innerHTML = html;
+    document.getElementById('trade-count').textContent = `${trades.length} trades`;
+  } catch (e) {
+    console.error('Trades fetch error:', e);
+  }
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+// ── Polling Loop ───────────────────────────────────────────────────
+const POLL_INTERVAL = 5000;
+
+async function refreshAll() {
+  const ok = await updateStatus();
+  await Promise.all([updateChart(), updateActivity(), updateTrades()]);
+
+  const now = new Date();
+  document.getElementById('last-refresh').textContent =
+    ok ? `Updated ${now.toLocaleTimeString()}` : 'Connection lost...';
+}
+
+// Init
+initChart();
+refreshAll();
+setInterval(refreshAll, POLL_INTERVAL);
+</script>
+
+</body>
+</html>
