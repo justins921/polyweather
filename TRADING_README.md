@@ -1,6 +1,6 @@
 # Kalshi Micro-Bankroll Trading Bot
 
-Async-first trading bot for Kalshi prediction markets, designed for a **$100 starting bankroll** with a target of **$20-30/month net** after fees.
+Async-first trading bot for Kalshi prediction markets, designed for an **$81.09 starting bankroll** with a target of **$20-30/month net** after fees.
 
 ## Architecture
 
@@ -59,11 +59,11 @@ python main.py --paper --log-level DEBUG
 
 | Limit | Value | Rationale |
 |-------|-------|-----------|
-| Max daily loss | $3 | Survive > everything |
-| Max total exposure | $20 | 20% of bankroll |
+| Max daily loss | $2.50 | ~3% of bankroll |
+| Max total exposure | $16 | ~20% of bankroll |
 | Max concurrent markets | 6 | Diversification |
-| Max per-market notional | $5 | No concentration |
-| Max per-order notional | $2 | Start small |
+| Max per-market notional | $4 | No concentration |
+| Max per-order notional | $1.50 | Start small |
 | Kill switch | >5% API errors in 5min | Protect against failures |
 | Circuit breaker | 3-tick adverse move in 10s | Adverse selection defense |
 
@@ -81,7 +81,7 @@ python main.py --paper --log-level DEBUG
 
 - Tracks rolling price window per market
 - Enters when price deviates >2σ from rolling mean
-- Max $1 per trade, 1-2 contracts
+- Max $0.80 per trade, 1-2 contracts
 - Hard stop-loss (5 ticks) + take-profit (3 ticks)
 - Must pass same net-edge gate
 

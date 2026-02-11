@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 # Defaults — overridden by CLI args
 DB_PATH = "data/trading.db"
 LOG_FILE = "logs/bot.jsonl"
-STARTING_BANKROLL = 100.0
+STARTING_BANKROLL = 81.09
 
 # ── SQLite helpers (sync — Flask is sync) ─────────────────────────────────
 
@@ -352,7 +352,7 @@ def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--db", default="data/trading.db", help="Path to SQLite DB")
     parser.add_argument("--log-file", default="logs/bot.jsonl", help="Path to JSON log")
-    parser.add_argument("--bankroll", type=float, default=100.0, help="Starting bankroll")
+    parser.add_argument("--bankroll", type=float, default=81.09, help="Starting bankroll")
     args = parser.parse_args()
 
     DB_PATH = args.db

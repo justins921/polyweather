@@ -30,14 +30,14 @@ class Settings(BaseSettings):
     kalshi_ws_path: str = "/trade-api/ws/v2"
 
     # ── Bankroll ─────────────────────────────────────────────────────────
-    starting_bankroll: float = 100.0
+    starting_bankroll: float = 81.09
 
     # ── Risk limits (NON-NEGOTIABLE) ─────────────────────────────────────
-    max_daily_loss: float = Field(default=3.0, ge=0)
-    max_total_exposure: float = Field(default=20.0, ge=0)
+    max_daily_loss: float = Field(default=2.50, ge=0)
+    max_total_exposure: float = Field(default=16.0, ge=0)
     max_concurrent_markets: int = Field(default=6, ge=1)
-    max_per_market_notional: float = Field(default=5.0, ge=0)
-    max_per_order_notional: float = Field(default=2.0, ge=0)
+    max_per_market_notional: float = Field(default=4.0, ge=0)
+    max_per_order_notional: float = Field(default=1.50, ge=0)
 
     # Kill switch
     kill_switch_error_pct: float = Field(default=5.0, ge=0)
@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     # ── Strategy B: Event reversion ──────────────────────────────────────
     er_rolling_window: int = Field(default=60, ge=10)
     er_entry_zscore: float = Field(default=2.0, ge=0.5)
-    er_max_notional: float = Field(default=1.0, ge=0)
+    er_max_notional: float = Field(default=0.80, ge=0)
     er_stop_loss_ticks: int = Field(default=5, ge=1)
     er_take_profit_ticks: int = Field(default=3, ge=1)
 
