@@ -1,20 +1,36 @@
 """
-Configuration for the Polymarket Weather Trading Bot.
+Configuration for the Kalshi Weather Trading Bot.
 
-Fill in PRIVATE_KEY and CLAUDE_API_KEY before running.
+Fill in KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH, and CLAUDE_API_KEY before running.
 """
 
 # ── Authentication ────────────────────────────────────────────────────────────
-# Polygon wallet private key (hex string, no 0x prefix)
-PRIVATE_KEY = ""
+# Kalshi API key ID (from kalshi.com/account/profile → API Keys)
+KALSHI_API_KEY_ID = ""
+
+# Path to your Kalshi RSA private key PEM file
+KALSHI_PRIVATE_KEY_PATH = ""
 
 # Anthropic API key
 CLAUDE_API_KEY = ""
 
-# ── Polymarket endpoints ──────────────────────────────────────────────────────
-GAMMA_API_URL = "https://gamma-api.polymarket.com"
-CLOB_API_URL = "https://clob.polymarket.com"
-CHAIN_ID = 137  # Polygon mainnet
+# ── Kalshi endpoints ─────────────────────────────────────────────────────────
+KALSHI_API_BASE = "https://api.elections.kalshi.com"
+KALSHI_API_PATH = "/trade-api/v2"
+
+# Set to True to use the demo/paper trading environment
+KALSHI_DEMO_MODE = False
+KALSHI_DEMO_BASE = "https://demo-api.kalshi.co"
+
+# ── Weather market series on Kalshi ──────────────────────────────────────────
+# Series tickers for weather markets to scan
+KALSHI_WEATHER_SERIES = [
+    "KXHIGHNY",      # NYC high temperature
+    "KXHIGHCHI",     # Chicago high temperature
+    "KXHIGHLAX",     # LA high temperature
+    "KXHIGHMIAMI",   # Miami high temperature
+    "KXRAINNYC",     # NYC rain
+]
 
 # ── Claude model ──────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
@@ -30,9 +46,7 @@ KELLY_FRACTION = 0.25           # Quarter-Kelly
 
 # ── Scanning parameters ──────────────────────────────────────────────────────
 SCAN_INTERVAL_SECONDS = 1800    # 30 minutes
-MIN_LIQUIDITY = 100             # Skip markets with liquidity below this (USD)
 MAX_DAYS_TO_RESOLUTION = 30     # Skip markets resolving more than 30 days out
-MARKET_TAG = "weather"          # Polymarket event tag to filter
 
 # ── API cost management ───────────────────────────────────────────────────────
 # Sonnet pricing per million tokens (as of 2025)
@@ -52,8 +66,9 @@ LEDGER_FILE = "logs/ledger.jsonl"
 
 # ── City coordinates for weather lookups ──────────────────────────────────────
 # (lat, lon, country_code)  — country_code "US" triggers NOAA, others use Open-Meteo
+# Mapped to Kalshi series tickers where applicable
 CITY_COORDS = {
-    # US cities
+    # US cities (matched to Kalshi series)
     "new york":     (40.7128, -74.0060, "US"),
     "nyc":          (40.7128, -74.0060, "US"),
     "chicago":      (41.8781, -87.6298, "US"),

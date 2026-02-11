@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Polymarket Weather Trading Bot
+Kalshi Weather Trading Bot
 
-Scans Polymarket for mispriced weather prediction markets,
+Scans Kalshi for mispriced weather prediction markets,
 fetches real forecast data, uses Claude to estimate true probabilities,
 and auto-executes trades using Kelly Criterion sizing.
 
@@ -264,16 +264,16 @@ def run_cycle(
         logger.info("  Best trade: %s", bet.reason)
         logger.info("  Bucket: %s", summary["question"][:80])
 
-        # Determine token to buy
+        # Determine trade parameters
+        # On Kalshi, the ticker is the same for YES/NO — the side param picks which
+        token_id = summary["clob_token_ids"][0] if summary["clob_token_ids"] else None
         if bet.side == "YES":
-            token_id = summary["clob_token_ids"][0] if summary["clob_token_ids"] else None
             buy_price = best["market_price"]
         else:
-            token_id = summary["clob_token_ids"][1] if len(summary["clob_token_ids"]) > 1 else None
             buy_price = 1 - best["market_price"]
 
         if not token_id:
-            logger.warning("  No token ID for %s side. Skipping.", bet.side)
+            logger.warning("  No ticker for trade. Skipping.")
             log_analysis(title, analysis.to_dict(), bet.to_dict())
             continue
 
@@ -287,8 +287,8 @@ def run_cycle(
             trade_result = {"success": True, "dry_run": True}
         else:
             if clob_client is None:
-                logger.error("  No CLOB client — cannot execute trade")
-                trade_result = {"success": False, "error": "No CLOB client"}
+                logger.error("  No Kalshi client — cannot execute trade")
+                trade_result = {"success": False, "error": "No Kalshi client"}
             else:
                 logger.info(
                     "  EXECUTING: Buy %s @ $%.2f for $%.2f",
@@ -297,7 +297,7 @@ def run_cycle(
                 trade_result = execute_trade(
                     client=clob_client,
                     token_id=token_id,
-                    side="BUY",
+                    side=bet.side,
                     size_usd=bet.size_usd,
                     market_price=buy_price,
                 )
@@ -338,7 +338,7 @@ def main():
     args = parse_args()
     setup_logging(verbose=args.verbose)
 
-    logger.info("Polymarket Weather Trading Bot starting")
+    logger.info("Kalshi Weather Trading Bot starting")
     logger.info(
         "Mode: %s%s",
         "DRY RUN" if args.dry_run else "LIVE",
@@ -346,8 +346,8 @@ def main():
     )
 
     # Validate configuration
-    if not args.dry_run and not config.PRIVATE_KEY:
-        logger.error("PRIVATE_KEY not set in config.py — cannot run in live mode")
+    if not args.dry_run and (not config.KALSHI_API_KEY_ID or not config.KALSHI_PRIVATE_KEY_PATH):
+        logger.error("KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH must be set in config.py for live mode")
         logger.error("Use --dry-run to test without trading")
         sys.exit(1)
 
