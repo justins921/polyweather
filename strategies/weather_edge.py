@@ -172,7 +172,9 @@ class WeatherEdgeStrategy:
         now = time.monotonic()
         for ticker in list(self._positions.keys()):
             pos = self._positions[ticker]
-            if now - pos.get("last_check", 0.0) < self._s.weather_settle_check_secs:
+            # None = never checked → check immediately, then throttle.
+            last = pos.get("last_check")
+            if last is not None and now - last < self._s.weather_settle_check_secs:
                 continue
             pos["last_check"] = now
 
