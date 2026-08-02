@@ -55,6 +55,34 @@ python main.py --allow-non-sports false
 python main.py --paper --log-level DEBUG
 ```
 
+## Running Automatically (macOS)
+
+When you're ready to let it run hands-off, install it as a LaunchAgent —
+it starts on login, restarts on crash, and keeps the Mac from idle-sleeping:
+
+```bash
+# One-time install (starts the bot immediately)
+bash scripts/install_autostart.sh
+
+# Watch what it's doing
+tail -f logs/runner.out
+
+# Check it's running
+launchctl list | grep polyweather
+
+# Stop + remove (bot cancels its open orders on shutdown)
+bash scripts/uninstall_autostart.sh
+```
+
+Notes:
+- The bot runs whatever mode is configured in `.env` (set `PAPER_MODE=true`
+  there first if you want the always-on run to be paper trading).
+- `caffeinate` prevents *idle* sleep, but closing the laptop lid still stops
+  the bot unless it's plugged in with "Prevent automatic sleeping when the
+  display is off" enabled (System Settings → Battery/Energy → Options).
+- The bot is resilient to being stopped: it cancels open orders on shutdown
+  and daily-loss limits reset at midnight UTC regardless of restarts.
+
 ## Risk Limits (Non-Negotiable)
 
 | Limit | Value | Rationale |
