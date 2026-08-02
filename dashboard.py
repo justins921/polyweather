@@ -175,7 +175,9 @@ def _parse_risk_state_from_logs() -> dict:
             ticker = e.get("ticker", "")
             reason = e.get("reason", msg)
             state["circuit_breakers"].append({"ticker": ticker, "reason": reason})
-        if "Daily loss limit hit" in msg or "daily_loss" in msg:
+        # Only the actual pause message counts — routine cycle summaries
+        # also contain the substring "daily_loss" and must not trigger it.
+        if "Daily loss limit hit" in msg:
             state["daily_loss_hit"] = True
     # Deduplicate breakers
     seen = set()
