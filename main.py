@@ -29,6 +29,7 @@ from log_config import setup_logging
 from settings import Settings
 from strategies.event_reversion import EventReversionStrategy
 from strategies.market_maker import MarketMakerStrategy
+from strategies.weather_edge import WeatherEdgeStrategy
 
 logger = logging.getLogger("main")
 
@@ -89,6 +90,13 @@ async def run(settings: Settings) -> None:
         risk_mgr=risk_mgr,
         storage=storage,
     )
+    weather_strategy = WeatherEdgeStrategy(
+        settings=settings,
+        client=client,
+        fee_model=fee_model,
+        risk_mgr=risk_mgr,
+        storage=storage,
+    )
 
     # ── Verify category availability ─────────────────────────────────────
     await _verify_categories(client, risk_mgr, settings)
@@ -126,6 +134,7 @@ async def run(settings: Settings) -> None:
 
     # Market list cache
     cached_eligible: list[dict[str, Any]] = []
+    cached_weather: list[dict[str, Any]] = []
     last_scan_time = 0.0
 
     try:
@@ -173,6 +182,12 @@ async def run(settings: Settings) -> None:
                     cycle, len(raw_markets),
                 )
                 cached_eligible = mkt_filter.filter(raw_markets, risk_mgr)
+                # Weather strategy filters for itself (the MM spread filter
+                # would reject tight-spread weather markets we WANT to take).
+                cached_weather = weather_strategy.select_markets(raw_markets)
+                if cached_weather:
+                    logger.info("Weather strategy: %d weather markets in scope",
+                                len(cached_weather))
                 last_scan_time = now
             else:
                 logger.info(
@@ -183,7 +198,7 @@ async def run(settings: Settings) -> None:
 
             eligible = cached_eligible
 
-            if not eligible:
+            if not eligible and not cached_weather:
                 logger.info("Cycle %d: no eligible markets — sleeping %ds",
                             cycle, 30)
                 try:
@@ -192,14 +207,18 @@ async def run(settings: Settings) -> None:
                     pass
                 continue
 
-            logger.info("Cycle %d: processing %d eligible markets with both strategies",
-                        cycle, len(eligible))
+            logger.info(
+                "Cycle %d: processing %d eligible + %d weather markets",
+                cycle, len(eligible), len(cached_weather),
+            )
 
             # Run strategies concurrently
             tasks = []
             for mkt in eligible:
                 tasks.append(mm_strategy.process_market(mkt))
                 tasks.append(er_strategy.process_market(mkt))
+            if cached_weather:
+                tasks.append(weather_strategy.process_markets(cached_weather))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
             errors = sum(1 for r in results if isinstance(r, Exception))

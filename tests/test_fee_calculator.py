@@ -18,11 +18,11 @@ class TestFeeModel:
         assert fee_model.half_spread_cents(40, 46) == 3.0
 
     def test_net_edge_maker_positive(self, fee_model):
-        # spread=8, gross=4, fees=0.01*2*100=2, slippage=2, net=0
-        # Need wider spread for positive net edge
-        # spread=10, gross=5, fees=2, slippage=2, net=1
+        # Kalshi charges the winning side only at settlement:
+        # spread=10, gross=5, expected fee=0.01*0.5*100=0.5,
+        # maker slippage=max(2-1,0)=1, net=3.5
         net = fee_model.net_edge_cents(40, 50, is_maker=True)
-        assert net == 1.0
+        assert net == 3.5
 
     def test_net_edge_maker_negative(self, fee_model):
         # spread=2, gross=1, fees=2, slippage=2, net=-3

@@ -33,7 +33,7 @@ KALSHI_WEATHER_SERIES = [
 ]
 
 # ── Claude model ──────────────────────────────────────────────────────────────
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+CLAUDE_MODEL = "claude-sonnet-5"
 
 # ── Risk management ───────────────────────────────────────────────────────────
 STARTING_BANKROLL = 100.0       # USD
@@ -73,6 +73,7 @@ CITY_COORDS = {
     "new york":     (40.7128, -74.0060, "US"),
     "nyc":          (40.7128, -74.0060, "US"),
     "chicago":      (41.8781, -87.6298, "US"),
+    "austin":       (30.2672, -97.7431, "US"),
     "miami":        (25.7617, -80.1918, "US"),
     "los angeles":  (34.0522, -118.2437, "US"),
     "la":           (34.0522, -118.2437, "US"),
@@ -114,6 +115,7 @@ CITY_TIMEZONES = {
     "new york":      "America/New_York",
     "nyc":           "America/New_York",
     "chicago":       "America/Chicago",
+    "austin":        "America/Chicago",
     "miami":         "America/New_York",
     "los angeles":   "America/Los_Angeles",
     "la":            "America/Los_Angeles",

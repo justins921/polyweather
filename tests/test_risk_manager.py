@@ -45,10 +45,14 @@ class TestDailyLoss:
         risk_mgr.record_pnl(-3.0)
         assert risk_mgr.daily_loss_exceeded()
 
-    def test_profit_doesnt_reduce_loss(self, risk_mgr):
+    def test_profit_offsets_loss(self, risk_mgr):
         risk_mgr.record_pnl(-2.0)
-        risk_mgr.record_pnl(1.0)  # profit
-        assert risk_mgr.daily_loss == pytest.approx(2.0)
+        risk_mgr.record_pnl(1.0)  # profit reduces net daily loss
+        assert risk_mgr.daily_loss == pytest.approx(1.0)
+
+    def test_loss_never_goes_negative(self, risk_mgr):
+        risk_mgr.record_pnl(5.0)  # pure profit day
+        assert risk_mgr.daily_loss == pytest.approx(0.0)
 
     def test_blocks_order_after_loss(self, risk_mgr):
         risk_mgr.record_pnl(-3.0)

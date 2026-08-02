@@ -67,7 +67,11 @@ class Settings(BaseSettings):
     # ── Market scanning ──────────────────────────────────────────────────
     # Comma-separated series tickers to scan (e.g. "KXHIGHNY,KXHIGHCHI").
     # Empty = fetch ALL open markets (expensive — ~50 paginated requests).
-    series_tickers: str = ""
+    # Defaults to the Kalshi weather series the weather strategy can model.
+    series_tickers: str = (
+        "KXHIGHNY,KXHIGHCHI,KXHIGHLAX,KXHIGHMIAMI,KXHIGHAUS,"
+        "KXHIGHDEN,KXHIGHPHIL,KXRAINNYC"
+    )
     # How often to re-scan for eligible markets (seconds).
     # Between scans, the cached list is reused and only orderbooks refresh.
     market_scan_interval_secs: int = Field(default=300, ge=10)
@@ -88,6 +92,24 @@ class Settings(BaseSettings):
     er_stop_loss_ticks: int = Field(default=3, ge=1)
     er_take_profit_ticks: int = Field(default=5, ge=1)
     er_max_hold_secs: int = Field(default=120, ge=10)
+
+    # ── Strategy C: Weather fair-value edge ──────────────────────────────
+    weather_enabled: bool = True
+    # Minimum fair-value-vs-price gap (cents) to enter a trade.
+    weather_min_edge_cents: int = Field(default=8, ge=1)
+    # Lower bar for observation locks (outcome already determined).
+    weather_lock_min_edge_cents: int = Field(default=3, ge=1)
+    weather_max_notional: float = Field(default=1.50, ge=0)
+    weather_max_contracts: int = Field(default=3, ge=1)
+    # Only trade markets resolving within N days (forecast skill decays fast).
+    weather_max_days_out: int = Field(default=1, ge=0)
+    weather_cache_ttl_secs: int = Field(default=900, ge=60)
+    # NWS high-temp forecast error stdev: base (same-day, °F) + per-day growth.
+    weather_forecast_sigma_base: float = Field(default=2.0, ge=0.5)
+    weather_sigma_per_day: float = Field(default=1.25, ge=0)
+    # Optional Claude blend (requires anthropic_api_key; costs per call).
+    weather_use_claude: bool = False
+    anthropic_api_key: str = ""
 
     # ── Category allowlist ───────────────────────────────────────────────
     allow_sports: bool = True
