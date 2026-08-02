@@ -99,7 +99,13 @@ async def run(settings: Settings) -> None:
     )
 
     # ── Verify category availability ─────────────────────────────────────
-    await _verify_categories(client, risk_mgr, settings)
+    # Skipped when a series filter is set — it fetches ALL open markets
+    # (~50 paginated requests) and tells us nothing we don't already know.
+    if not settings.series_tickers.strip():
+        await _verify_categories(client, risk_mgr, settings)
+
+    # Rebuild weather positions from the trade log (restart safety)
+    await weather_strategy.restore_positions()
 
     # ── Graceful shutdown ────────────────────────────────────────────────
     shutdown_event = asyncio.Event()
@@ -185,6 +191,14 @@ async def run(settings: Settings) -> None:
                 # Weather strategy filters for itself (the MM spread filter
                 # would reject tight-spread weather markets we WANT to take).
                 cached_weather = weather_strategy.select_markets(raw_markets)
+                # Weather markets belong to the weather strategy alone:
+                # MM quotes there would trade against our own taker orders,
+                # and mean-reversion fights informed forecast-driven moves.
+                weather_tickers = {m.get("ticker") for m in cached_weather}
+                cached_eligible = [
+                    m for m in cached_eligible
+                    if m.get("ticker") not in weather_tickers
+                ]
                 if cached_weather:
                     logger.info("Weather strategy: %d weather markets in scope",
                                 len(cached_weather))
@@ -195,6 +209,10 @@ async def run(settings: Settings) -> None:
                     cycle, len(cached_eligible),
                     int(settings.market_scan_interval_secs - (now - last_scan_time)),
                 )
+
+            # Settle held weather positions even if no markets are in scope
+            # (settled markets drop out of the scan — exactly when this matters)
+            await weather_strategy.check_settlements()
 
             eligible = cached_eligible
 

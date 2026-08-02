@@ -220,6 +220,26 @@ class EventReversionStrategy:
         except Exception:
             pass
 
+        # Close any FILLED inventory with an aggressive offsetting sell.
+        # If the entry never filled, Kalshi rejects the sell (no position
+        # to reduce) — that just means we were already flat.
+        if window.entry_count > 0:
+            if window.active_side == "yes":
+                sell_yes = max(1, min(99, int(current_mid) - 2))
+            else:  # selling NO aggressively = accept a lower NO price
+                sell_yes = max(1, min(99, int(current_mid) + 2))
+            try:
+                await self._client.place_order(OrderRequest(
+                    ticker=window.ticker,
+                    action="sell",
+                    side=window.active_side,
+                    count=window.entry_count,
+                    yes_price=sell_yes,
+                ))
+            except Exception as exc:
+                logger.debug("ER: close order rejected for %s (likely unfilled entry): %s",
+                             window.ticker, exc)
+
         logger.info(
             "ER: Exit %s %s @ mid=%.0f (entry=%d, %s)",
             window.active_side, window.ticker, current_mid, entry, exit_reason,

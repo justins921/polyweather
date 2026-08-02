@@ -9,6 +9,7 @@ supports configurable maker/taker rates.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,18 @@ class FeeModel:
             "entry_cents": entry_price_cents,
             "exit_cents": exit_price_cents,
         }
+
+    # ── Exact Kalshi fee formula ────────────────────────────────────────
+
+    @staticmethod
+    def kalshi_trading_fee_cents(price_cents: int, count: int = 1) -> int:
+        """
+        Kalshi's actual trading fee, in cents, rounded up to the next cent:
+            fee = ceil(0.07 * count * P * (1-P))
+        Quadratic in price: ~2¢/contract at 50¢, ~1¢ at 90¢.
+        """
+        p = price_cents / 100.0
+        return math.ceil(7.0 * count * p * (1.0 - p))
 
     # ── Sizing helper ───────────────────────────────────────────────────
 

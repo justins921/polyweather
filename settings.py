@@ -104,6 +104,8 @@ class Settings(BaseSettings):
     # Only trade markets resolving within N days (forecast skill decays fast).
     weather_max_days_out: int = Field(default=1, ge=0)
     weather_cache_ttl_secs: int = Field(default=900, ge=60)
+    # How often to poll held markets for settlement (per position).
+    weather_settle_check_secs: int = Field(default=300, ge=30)
     # NWS high-temp forecast error stdev: base (same-day, °F) + per-day growth.
     weather_forecast_sigma_base: float = Field(default=2.0, ge=0.5)
     weather_sigma_per_day: float = Field(default=1.25, ge=0)

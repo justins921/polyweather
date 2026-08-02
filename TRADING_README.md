@@ -15,7 +15,9 @@ main.py                       ← async CLI entry point
 │   └── backtest_engine.py    ← CSV/JSONL replay backtester
 ├── strategies/
 │   ├── market_maker.py       ← Strategy A: inventory-skewed micro MM
-│   └── event_reversion.py    ← Strategy B: mean-reversion on event spikes
+│   ├── event_reversion.py    ← Strategy B: mean-reversion on event spikes
+│   └── weather_edge.py       ← Strategy C: NOAA fair-value vs market price
+│                                (primary strategy; owns weather markets)
 ├── data/storage.py           ← aiosqlite persistence (trades, quotes, P&L)
 ├── settings.py               ← pydantic config (env + .env)
 └── log_config.py             ← structured JSON logging

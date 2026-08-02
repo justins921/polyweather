@@ -123,6 +123,100 @@ class WeatherEdgeStrategy:
         if settings.anthropic_api_key and not config.CLAUDE_API_KEY:
             config.CLAUDE_API_KEY = settings.anthropic_api_key
 
+    # ── Restart safety ───────────────────────────────────────────────────
+
+    async def restore_positions(self) -> None:
+        """Rebuild in-memory positions from the trade log after a restart,
+        so the auto-restarting launchd service can't double-enter markets."""
+        try:
+            rows = await self._storage.get_trades(limit=500)
+        except Exception as exc:
+            logger.warning("Weather: position restore failed: %s", exc)
+            return
+
+        cutoff = time.time() - 3 * 86400
+        entries: dict[str, dict[str, Any]] = {}
+        settled: set[str] = set()
+        for r in rows:  # rows are newest-first
+            if r.get("strategy") != "weather_edge" or (r.get("ts") or 0) < cutoff:
+                continue
+            t = r.get("ticker", "")
+            if str(r.get("reason") or "").startswith("settlement"):
+                settled.add(t)
+            elif t not in entries:
+                entries[t] = r
+
+        for t, r in entries.items():
+            if t in settled or t in self._positions:
+                continue
+            self._positions[t] = {
+                "order_id": None,
+                "side": r.get("side", "yes"),
+                "price_cents": int(r.get("price_cents") or 0),
+                "count": int(r.get("count") or 1),
+                "fair": 0.0,
+                "entered_at": r.get("ts") or time.time(),
+            }
+            self._risk.record_fill(
+                t, r.get("side", "yes"), int(r.get("count") or 1),
+                int(r.get("price_cents") or 0),
+            )
+            logger.info("Weather: restored open position %s %s x%s @ %s¢",
+                        t, r.get("side"), r.get("count"), r.get("price_cents"))
+
+    # ── Settlement reconciliation ────────────────────────────────────────
+
+    async def check_settlements(self) -> None:
+        """Poll held markets for settlement; realize P&L into the risk
+        manager and release exposure. Throttled per position."""
+        now = time.monotonic()
+        for ticker in list(self._positions.keys()):
+            pos = self._positions[ticker]
+            if now - pos.get("last_check", 0.0) < self._s.weather_settle_check_secs:
+                continue
+            pos["last_check"] = now
+
+            try:
+                data = await self._client.get_market(ticker)
+            except Exception as exc:
+                logger.debug("Weather: settle check failed for %s: %s", ticker, exc)
+                continue
+
+            mkt = data.get("market", data)
+            status = (mkt.get("status") or "").lower()
+            result = (mkt.get("result") or "").lower()
+            if status not in ("settled", "finalized") or result not in ("yes", "no"):
+                continue
+
+            price, count = pos["price_cents"], pos["count"]
+            won = result == pos["side"]
+            gross_c = (100 - price) * count if won else -price * count
+            fee_c = FeeModel.kalshi_trading_fee_cents(price, count)
+            net = (gross_c - fee_c) / 100.0
+
+            self._risk.record_pnl(net)
+            self._risk.close_position(ticker)
+            del self._positions[ticker]
+
+            logger.info(
+                "Weather SETTLED: %s → %s  (%s %s x%d @ %d¢)  net=$%.2f",
+                ticker, result.upper(), "WIN" if won else "LOSS",
+                pos["side"], count, price, net,
+                extra={"ticker": ticker, "action": "weather_settlement", "pnl": net},
+            )
+            await self._storage.log_trade(
+                ticker=ticker,
+                side=pos["side"],
+                count=count,
+                price_cents=100 if won else 0,
+                strategy="weather_edge",
+                reason=f"settlement {result}",
+                pnl=net,
+                fees=fee_c / 100.0,
+                gross_pnl=gross_c / 100.0,
+                net_pnl=net,
+            )
+
     # ── Market selection ─────────────────────────────────────────────────
 
     def select_markets(self, markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -454,7 +548,10 @@ class WeatherEdgeStrategy:
             )
             return
 
-        await self._enter(mkt, side, price_cents, fair, edge, model_desc)
+        # Conviction scaling: 1 contract at the edge threshold, +1 for each
+        # additional multiple of it (locks hit max size fastest).
+        max_count = max(1, min(self._s.weather_max_contracts, int(edge // required)))
+        await self._enter(mkt, side, price_cents, fair, edge, model_desc, max_count)
 
     # ── Order placement ──────────────────────────────────────────────────
 
@@ -466,12 +563,13 @@ class WeatherEdgeStrategy:
         fair: float,
         edge: float,
         model_desc: str,
+        max_count: int | None = None,
     ) -> None:
         ticker = mkt["ticker"]
         price_cents = max(1, min(99, price_cents))
 
         count = FeeModel.max_contracts(self._s.weather_max_notional, price_cents)
-        count = max(1, min(count, self._s.weather_max_contracts))
+        count = max(1, min(count, max_count or self._s.weather_max_contracts))
 
         notional = count * price_cents / 100.0
         ok, reason = self._risk.can_place_order(
