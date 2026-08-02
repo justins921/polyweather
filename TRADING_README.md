@@ -55,6 +55,10 @@ python main.py --allow-non-sports false
 
 # Verbose logging
 python main.py --paper --log-level DEBUG
+
+# The bot trades ONLY weather markets by default (weather_only=true).
+# To re-enable the market maker + event reversion on non-weather series:
+python main.py --weather-only false
 ```
 
 ## Running Automatically (macOS)

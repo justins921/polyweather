@@ -37,6 +37,8 @@ logger = logging.getLogger("main")
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Kalshi micro-bankroll trading bot")
     p.add_argument("--paper", action="store_true", help="Paper-trading mode")
+    p.add_argument("--weather-only", type=_bool, default=None,
+                   help="Trade ONLY weather markets (default true)")
     p.add_argument("--allow-sports", type=_bool, default=None)
     p.add_argument("--allow-non-sports", type=_bool, default=None)
     p.add_argument("--log-level", type=str, default=None)
@@ -120,11 +122,14 @@ async def run(settings: Settings) -> None:
 
     # ── Core loop ────────────────────────────────────────────────────────
     logger.info(
-        "Bot started  bankroll=$%.2f  max_daily_loss=$%.2f  max_exposure=$%.2f",
+        "Bot started  bankroll=$%.2f  max_daily_loss=$%.2f  max_exposure=$%.2f  weather_only=%s",
         settings.starting_bankroll,
         settings.max_daily_loss,
         settings.max_total_exposure,
+        settings.weather_only,
     )
+    if settings.weather_only:
+        logger.info("WEATHER-ONLY mode: market maker and event reversion are disabled")
 
     # Parse series tickers for server-side filtering
     series_list: list[str] = [
@@ -187,18 +192,22 @@ async def run(settings: Settings) -> None:
                     "Cycle %d: scanned %d markets from Kalshi",
                     cycle, len(raw_markets),
                 )
-                cached_eligible = mkt_filter.filter(raw_markets, risk_mgr)
                 # Weather strategy filters for itself (the MM spread filter
                 # would reject tight-spread weather markets we WANT to take).
                 cached_weather = weather_strategy.select_markets(raw_markets)
-                # Weather markets belong to the weather strategy alone:
-                # MM quotes there would trade against our own taker orders,
-                # and mean-reversion fights informed forecast-driven moves.
-                weather_tickers = {m.get("ticker") for m in cached_weather}
-                cached_eligible = [
-                    m for m in cached_eligible
-                    if m.get("ticker") not in weather_tickers
-                ]
+                if settings.weather_only:
+                    # ONLY the weather strategy trades — nothing reaches MM/ER.
+                    cached_eligible = []
+                else:
+                    cached_eligible = mkt_filter.filter(raw_markets, risk_mgr)
+                    # Weather markets belong to the weather strategy alone:
+                    # MM quotes there would trade against our own taker orders,
+                    # and mean-reversion fights informed forecast-driven moves.
+                    weather_tickers = {m.get("ticker") for m in cached_weather}
+                    cached_eligible = [
+                        m for m in cached_eligible
+                        if m.get("ticker") not in weather_tickers
+                    ]
                 if cached_weather:
                     logger.info("Weather strategy: %d weather markets in scope",
                                 len(cached_weather))
@@ -232,9 +241,10 @@ async def run(settings: Settings) -> None:
 
             # Run strategies concurrently
             tasks = []
-            for mkt in eligible:
-                tasks.append(mm_strategy.process_market(mkt))
-                tasks.append(er_strategy.process_market(mkt))
+            if not settings.weather_only:
+                for mkt in eligible:
+                    tasks.append(mm_strategy.process_market(mkt))
+                    tasks.append(er_strategy.process_market(mkt))
             if cached_weather:
                 tasks.append(weather_strategy.process_markets(cached_weather))
 
@@ -337,6 +347,8 @@ def main() -> None:
     # CLI overrides
     if args.paper:
         settings.paper_mode = True
+    if args.weather_only is not None:
+        settings.weather_only = args.weather_only
     if args.allow_sports is not None:
         settings.allow_sports = args.allow_sports
     if args.allow_non_sports is not None:

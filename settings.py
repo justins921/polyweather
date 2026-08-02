@@ -95,6 +95,9 @@ class Settings(BaseSettings):
 
     # ── Strategy C: Weather fair-value edge ──────────────────────────────
     weather_enabled: bool = True
+    # When True (default), ONLY the weather strategy trades — the market
+    # maker and event-reversion strategies are fully disabled.
+    weather_only: bool = True
     # Minimum fair-value-vs-price gap (cents) to enter a trade.
     weather_min_edge_cents: int = Field(default=8, ge=1)
     # Lower bar for observation locks (outcome already determined).
