@@ -56,8 +56,8 @@ class FeeModel:
         Compute net edge in cents for a round-trip (entry + exit).
 
         gross_edge   = spread / 2  (our theoretical capture as a passive MM)
-        fees         = entry_fee + exit_fee  (per contract, in cents)
-        slippage     = configurable buffer
+        fees         = expected settlement fee (Kalshi charges winning side only)
+        slippage     = configurable buffer (reduced for maker orders)
         net_edge     = gross_edge - fees - slippage
 
         If net_edge <= 0 the trade MUST be rejected.
@@ -66,10 +66,13 @@ class FeeModel:
         gross = spread / 2.0
 
         per_side_fee = self.maker_fee if is_maker else self.taker_fee
-        # Fees for entry AND exit (both sides of a round-trip)
-        total_fee_cents = (per_side_fee * 2) * 100  # convert $ → cents
+        # Kalshi charges on the WINNING side at settlement only.
+        # Expected fee = ~50% probability of winning * 1 fee per contract.
+        expected_fee_cents = per_side_fee * 0.5 * 100  # convert $ → cents
 
-        net = gross - total_fee_cents - self.slippage_ticks
+        slip = self.slippage_ticks if not is_maker else max(self.slippage_ticks - 1, 0)
+
+        net = gross - expected_fee_cents - slip
         return net
 
     def net_edge_dollars(

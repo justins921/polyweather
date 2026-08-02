@@ -85,8 +85,9 @@ class Settings(BaseSettings):
     er_rolling_window: int = Field(default=60, ge=10)
     er_entry_zscore: float = Field(default=2.0, ge=0.5)
     er_max_notional: float = Field(default=0.80, ge=0)
-    er_stop_loss_ticks: int = Field(default=5, ge=1)
-    er_take_profit_ticks: int = Field(default=3, ge=1)
+    er_stop_loss_ticks: int = Field(default=3, ge=1)
+    er_take_profit_ticks: int = Field(default=5, ge=1)
+    er_max_hold_secs: int = Field(default=120, ge=10)
 
     # ── Category allowlist ───────────────────────────────────────────────
     allow_sports: bool = True

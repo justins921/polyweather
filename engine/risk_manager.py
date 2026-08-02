@@ -107,10 +107,9 @@ class RiskManager:
         return self._daily_loss >= self._s.max_daily_loss
 
     def record_pnl(self, pnl: float) -> None:
-        """Record realized P&L (negative = loss)."""
+        """Record realized P&L — tracks net daily loss (wins offset losses)."""
         self._maybe_reset_daily()
-        if pnl < 0:
-            self._daily_loss += abs(pnl)
+        self._daily_loss = max(0.0, self._daily_loss - pnl)
         logger.info("Recorded P&L: $%.4f  daily_loss=$%.4f", pnl, self._daily_loss,
                      extra={"daily_loss": self._daily_loss, "pnl": pnl})
 

@@ -38,6 +38,7 @@ class PriceWindow:
     active_order_id: str | None = None
     active_side: str = ""
     entry_price: int = 0
+    entry_count: int = 0
     entry_time: float = 0.0
 
 
@@ -164,6 +165,7 @@ class EventReversionStrategy:
             window.active_order_id = result.get("order_id")
             window.active_side = side
             window.entry_price = price_cents
+            window.entry_count = count
             window.entry_time = time.monotonic()
 
             logger.info(
@@ -202,6 +204,12 @@ class EventReversionStrategy:
         elif profit_ticks <= -sl:
             exit_reason = f"stop_loss ({profit_ticks:.0f} ticks)"
 
+        # Time-based exit: don't hold positions forever
+        if not exit_reason and window.entry_time > 0:
+            held = time.monotonic() - window.entry_time
+            if held > self._s.er_max_hold_secs:
+                exit_reason = f"max_hold_time ({held:.0f}s > {self._s.er_max_hold_secs}s)"
+
         if not exit_reason:
             return
 
@@ -219,14 +227,14 @@ class EventReversionStrategy:
         )
 
         # Record P&L
-        pnl_cents = profit_ticks
+        pnl_cents = profit_ticks * window.entry_count
         pnl_dollars = pnl_cents / 100.0
         self._risk.record_pnl(pnl_dollars)
 
         await self._storage.log_trade(
             ticker=window.ticker,
             side=window.active_side,
-            count=1,
+            count=window.entry_count,
             price_cents=int(current_mid),
             strategy="event_reversion",
             reason=exit_reason,
@@ -237,4 +245,5 @@ class EventReversionStrategy:
         window.active_order_id = None
         window.active_side = ""
         window.entry_price = 0
+        window.entry_count = 0
         window.entry_time = 0.0
