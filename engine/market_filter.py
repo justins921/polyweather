@@ -67,7 +67,7 @@ class MarketFilter:
         ticker = market.get("ticker", "")
         status = market.get("status", "")
 
-        if status != "open":
+        if status not in ("open", "active"):
             return False, f"status={status}"
 
         # Category check

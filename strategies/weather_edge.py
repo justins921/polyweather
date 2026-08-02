@@ -225,7 +225,8 @@ class WeatherEdgeStrategy:
         """Pick open weather markets we know how to model."""
         out = []
         for m in markets:
-            if m.get("status") != "open":
+            # Kalshi reports tradeable markets as "active" (docs say "open")
+            if m.get("status") not in ("open", "active"):
                 continue
             if series_of(m.get("ticker", "")) in SERIES_CITY:
                 out.append(m)
