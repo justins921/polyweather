@@ -191,7 +191,8 @@ class PaperEngine:
             # Fill if best ask < our bid (price moved through)
             if no_bids:
                 best_ask = 100 - int(no_bids[0][0])
-                if best_ask < order.yes_price:
+                # <= so taker orders placed AT the ask can fill
+                if best_ask <= order.yes_price:
                     # Conservative: fill at our price (not at ask)
                     fill_price = order.yes_price + self._s.slippage_buffer_ticks
                     fill_price = min(fill_price, 99)
@@ -202,7 +203,8 @@ class PaperEngine:
             if yes_bids:
                 best_yes_bid = int(yes_bids[0][0])
                 best_no_ask = 100 - best_yes_bid
-                if best_no_ask < no_price:
+                # <= so taker orders placed AT the ask can fill
+                if best_no_ask <= no_price:
                     fill_price = order.yes_price - self._s.slippage_buffer_ticks
                     fill_price = max(fill_price, 1)
                     self._execute_fill(order, fill_price)

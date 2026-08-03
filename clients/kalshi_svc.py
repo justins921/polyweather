@@ -227,8 +227,28 @@ class KalshiClient:
         return await self._get(f"/markets/{ticker}")
 
     async def get_orderbook(self, ticker: str, depth: int = 10) -> dict[str, Any]:
+        """Fetch and normalize an orderbook.
+
+        Returns {"yes": [[price_cents, qty], ...], "no": [...]} with levels
+        sorted BEST-FIRST (highest bid at index 0). Handles both Kalshi
+        formats: legacy "orderbook" (cents ints) and current "orderbook_fp"
+        (dollar strings under yes_dollars/no_dollars). The raw API lists
+        levels ascending, so the best bid is the LAST element — consumers
+        here index [0], hence the re-sort.
+        """
         data = await self._get(f"/markets/{ticker}/orderbook", {"depth": depth})
-        return data.get("orderbook", {})
+        ob = data.get("orderbook") or {}
+        yes = ob.get("yes") or []
+        no = ob.get("no") or []
+        if not yes and not no:
+            fp = data.get("orderbook_fp") or {}
+            yes = [[round(float(p) * 100), float(q)]
+                   for p, q in (fp.get("yes_dollars") or [])]
+            no = [[round(float(p) * 100), float(q)]
+                  for p, q in (fp.get("no_dollars") or [])]
+        yes = sorted(([int(l[0]), l[1]] for l in yes), key=lambda l: -l[0])
+        no = sorted(([int(l[0]), l[1]] for l in no), key=lambda l: -l[0])
+        return {"yes": yes, "no": no}
 
     async def get_event(self, event_ticker: str) -> dict[str, Any]:
         return await self._get(f"/events/{event_ticker}")

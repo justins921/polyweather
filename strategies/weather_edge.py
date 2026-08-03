@@ -248,25 +248,43 @@ class WeatherEdgeStrategy:
 
         tasks = [self._process_city(city, mkts) for city, mkts in by_city.items()]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        candidates: list[dict[str, Any]] = []
         for r in results:
             if isinstance(r, Exception):
                 logger.error("Weather strategy error: %s", r, exc_info=r)
+            elif r:
+                candidates.extend(r)
+        # Visibility: show how close the best non-entered market came.
+        if candidates:
+            best = max(candidates, key=lambda c: c["edge"])
+            logger.info(
+                "Weather: best remaining edge %.1f¢ on %s "
+                "(fair=%.0f¢, market %d/%d, need ≥%d¢) [%d markets priced]",
+                best["edge"], best["ticker"], best["fair"],
+                best["bid"], best["ask"], best["need"], len(candidates),
+            )
 
-    async def _process_city(self, city: str, markets: list[dict[str, Any]]) -> None:
+    async def _process_city(
+        self, city: str, markets: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         weather_data = await self._get_weather(city)
         if not weather_data:
             logger.info("Weather: no forecast data for %s — skipping %d markets",
                         city, len(markets))
-            return
+            return []
 
         claude_fairs = await self._claude_fair_values(markets, weather_data)
 
+        candidates = []
         for mkt in markets:
             try:
-                await self._evaluate_market(city, mkt, weather_data, claude_fairs)
+                cand = await self._evaluate_market(city, mkt, weather_data, claude_fairs)
+                if cand:
+                    candidates.append(cand)
             except Exception as exc:
                 logger.warning("Weather: evaluation failed for %s: %s",
                                mkt.get("ticker", "?"), exc)
+        return candidates
 
     # ── Weather fetching (cached) ────────────────────────────────────────
 
@@ -448,7 +466,9 @@ class WeatherEdgeStrategy:
         mkt: dict[str, Any],
         weather_data: dict[str, Any],
         claude_fairs: dict[str, tuple[float, float]],
-    ) -> None:
+    ) -> dict[str, Any] | None:
+        """Evaluate one market. Returns a 'closest miss' candidate dict when
+        it priced the market but found insufficient edge; None otherwise."""
         ticker = mkt.get("ticker", "")
         if not ticker or ticker in self._positions:
             return
@@ -549,12 +569,20 @@ class WeatherEdgeStrategy:
                 "Weather %s: no edge (fair=%.0f bid=%d ask=%d need=%d) [%s]",
                 ticker, fair_c, best_bid, best_ask, required, model_desc,
             )
-            return
+            return {
+                "ticker": ticker,
+                "edge": max(yes_edge, no_edge),
+                "fair": fair_c,
+                "bid": best_bid,
+                "ask": best_ask,
+                "need": required,
+            }
 
         # Conviction scaling: 1 contract at the edge threshold, +1 for each
         # additional multiple of it (locks hit max size fastest).
         max_count = max(1, min(self._s.weather_max_contracts, int(edge // required)))
         await self._enter(mkt, side, price_cents, fair, edge, model_desc, max_count)
+        return None
 
     # ── Order placement ──────────────────────────────────────────────────
 
