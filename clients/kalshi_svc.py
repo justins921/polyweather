@@ -96,15 +96,21 @@ class OrderRequest:
     client_order_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        # Current Kalshi schema: the legacy "type" field was REMOVED (all
+        # orders are limit orders), and the price is submitted for the side
+        # being traded (yes_price or no_price, integer cents 1-99).
+        d: dict[str, Any] = {
             "ticker": self.ticker,
             "action": self.action,
             "side": self.side,
             "count": self.count,
-            "type": self.type,
-            "yes_price": self.yes_price,
             "client_order_id": self.client_order_id,
         }
+        if self.side == "no":
+            d["no_price"] = 100 - self.yes_price
+        else:
+            d["yes_price"] = self.yes_price
+        return d
 
 
 # ── Kalshi client ───────────────────────────────────────────────────────────
@@ -178,7 +184,12 @@ class KalshiClient:
         url = self._settings.rest_url + path
         headers = self._auth_headers("POST", self._settings.kalshi_api_path + path)
         resp = await self._http.post(url, headers=headers, json=data)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # Include the response body — Kalshi 400s explain exactly which
+            # field was rejected, and that must reach the logs.
+            raise RuntimeError(
+                f"POST {path} -> HTTP {resp.status_code}: {resp.text[:300]}"
+            )
         return resp.json()
 
     async def _delete(self, path: str) -> dict:
