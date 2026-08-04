@@ -282,17 +282,45 @@ class KalshiClient:
     # ── Order management ─────────────────────────────────────────────────
 
     async def place_order(self, order: OrderRequest) -> dict[str, Any]:
-        """Place a limit order. Returns the order dict from Kalshi."""
+        """Place a limit order via Kalshi's V2 order endpoint.
+
+        The legacy /portfolio/orders endpoint now returns HTTP 410. V2 uses
+        a single order book: side 'bid' buys the YES side; side 'ask' sells
+        YES, which for event contracts is how you take the NO side. Price is
+        always the YES price in fixed-point dollars; count is a fixed-point
+        contract string.
+        """
+        # Map (action, yes/no side) → book side. Buying NO == selling YES
+        # (ask); selling NO == buying YES back (bid).
+        if (order.action, order.side) in (("buy", "yes"), ("sell", "no")):
+            book_side = "bid"
+        else:
+            book_side = "ask"
+
+        payload: dict[str, Any] = {
+            "ticker": order.ticker,
+            "client_order_id": order.client_order_id,
+            "side": book_side,
+            "count": f"{order.count}.00",
+            "price": f"{order.yes_price / 100:.4f}",
+            "time_in_force": "good_till_canceled",
+            "self_trade_prevention_type": "taker_at_cross",
+        }
+        if order.action == "sell":
+            # Closing trades must only reduce an existing position — without
+            # this, a V2 ask with no position OPENS a NO position instead.
+            payload["reduce_only"] = True
+
         logger.info(
-            "Placing order: %s %s %s x%d @ %d¢ [%s]",
+            "Placing order: %s %s %s x%d @ %d¢ (v2 %s @ %s) [%s]",
             order.action, order.side, order.ticker,
-            order.count, order.yes_price, order.client_order_id[:8],
+            order.count, order.yes_price,
+            book_side, payload["price"], order.client_order_id[:8],
         )
-        data = await self._post("/portfolio/orders", order.to_dict())
-        return data.get("order", data)
+        return await self._post("/portfolio/events/orders", payload)
 
     async def cancel_order(self, order_id: str) -> dict[str, Any]:
-        return await self._delete(f"/portfolio/orders/{order_id}")
+        return await self._delete(f"/portfolio/events/orders/{order_id}")
 
     async def batch_cancel(self, order_ids: list[str]) -> list[dict]:
         """Cancel multiple orders. Returns list of results."""
